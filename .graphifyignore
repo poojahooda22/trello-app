@@ -1,0 +1,40 @@
+# Keep the Graphify code-graph focused on hand-written PRODUCT source.
+# node_modules / .git / __pycache__ are excluded by Graphify's built-in defaults,
+# and everything in .gitignore is honored too — this file adds project-specific exclusions.
+# Copied to the repo root as `.graphifyignore` by /agentic-harness:harness-init.
+
+# Agent harness internals are infrastructure, NOT product source — keep them out of the graph
+# (skills/rules/hooks are generic agent plumbing, not this project's code).
+.claude/
+**/.claude/
+.agents/
+**/.agents/
+
+# Dependency / build / cache noise
+**/dist/
+**/build/
+**/.next/
+**/coverage/
+**/__pycache__/
+**/.venv/
+**/*.pyc
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+
+# Machine-written, not authored source
+**/migrations/versions/
+**/alembic/versions/
+**/*.generated.*
+**/*.d.ts
+**/*.lock
+**/package-lock.json
+**/pnpm-lock.yaml
+
+# Graphify's own output (also gitignored)
+graphify-out/
+**/graphify-out/
+
+# Project-specific (trello-app): machine-written source
+**/routeTree.gen.ts
+**/prisma/migrations/

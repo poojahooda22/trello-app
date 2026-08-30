@@ -1,0 +1,135 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  MEMBER
+}
+
+model User {
+  id           String @id @default(uuid())
+  email        String @unique
+  passwordHash String
+
+  memberships    Member[]
+  assignedIssues IssueMapping[]
+  comments       Comment[]
+}
+
+model Organization {
+  id          String  @id @default(uuid())
+  name        String
+  description String?
+
+  members Member[]
+  boards  Board[]
+  invites Invite[]
+}
+
+// Join table for the User <-> Organization many-to-many, carrying the role
+model Member {
+  id     String @id @default(uuid())
+  userId String
+  orgId  String
+  role   Role   @default(MEMBER)
+
+  user User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  org  Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, orgId])
+  @@index([orgId])
+}
+
+// A pending invitation to join an organization. The token is the secret that
+// makes /accept safe: unguessable, single-use (acceptedAt), and expiring.
+model Invite {
+  id         String    @id @default(uuid())
+  email      String
+  orgId      String
+  role       Role      @default(MEMBER)
+  token      String    @unique
+  expiresAt  DateTime
+  acceptedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  org Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@index([email])
+}
+
+model Board {
+  id             String @id @default(uuid())
+  title          String
+  organizationId String
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sections     Section[]
+
+  @@index([organizationId])
+}
+
+// A column on a board ("Upcoming", "In Progress", "Done").
+// position orders them left-to-right; gaps are intentional so a reorder is
+// one UPDATE to the midpoint rather than a renumber of every row.
+model Section {
+  id       String @id @default(uuid())
+  title    String
+  boardId  String
+  position Float
+
+  board  Board   @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  issues Issue[]
+
+  @@index([boardId, position])
+}
+
+// A card. Its section IS its status; the board is reached via section.
+model Issue {
+  id          String  @id @default(uuid())
+  title       String
+  description String?
+  sectionId   String
+  position    Float
+
+  section   Section        @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  assignees IssueMapping[]
+  comments  Comment[]
+
+  @@index([sectionId, position])
+}
+
+// Join table for the User <-> Issue many-to-many ("Issues mapping" in the design)
+model IssueMapping {
+  id      String @id @default(uuid())
+  userId  String
+  issueId String
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, issueId])
+  @@index([issueId])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  content   String
+  issueId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([issueId])
+}

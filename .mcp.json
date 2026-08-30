@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "command": "C:\\Users\\Redsparrow\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+      "args": [
+        "-m",
+        "graphify.serve",
+        "E:\\Development\\Portfolio-phase2\\trello-app\\graphify-out\\graph.json"
+      ]
+    }
+  }
+}

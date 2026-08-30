@@ -1,0 +1,11 @@
+{
+  "_comment": "Project-local file → skill/rule dispatch map, read by the agentic-harness file-dispatch hook (PreToolUse: Edit|Write). Canonical location: <repo>/.claude/file-skill-map.json — the hook CODE ships in the plugin, only this DATA is per-project. Each entry fires when an Edit/Write targets a path matching `pattern` (a JS regex SOURCE string, matched case-insensitively against the forward-slashed path). `skills` are invoked first; `rules` are file names in the rules-topical corpus to read first. Empty `map` = no-op.",
+  "map": [
+    { "pattern": "apps/backend/.*\\.ts$", "skills": ["/security-architecture"], "rules": ["scalability.md"] },
+    { "pattern": "packages/db/prisma/.*(schema\\.prisma|\\.sql)$", "skills": [], "rules": ["scalability.md", "implementation.md"] },
+    { "pattern": "apps/frontend/src/.*\\.(ts|tsx)$", "skills": [], "rules": ["performance.md"] },
+    { "pattern": "apps/websockets/.*\\.ts$", "skills": ["/security-architecture"], "rules": ["scalability.md"] },
+    { "pattern": "\\.(test|spec)\\.(ts|tsx)$", "skills": ["/testing-verification"], "rules": [] },
+    { "pattern": "\\.claude/skills/.*/SKILL\\.md$", "skills": ["/agent-architect"], "rules": ["skill-dispatch.md"] }
+  ]
+}
