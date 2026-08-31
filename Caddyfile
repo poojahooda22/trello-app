@@ -1,0 +1,30 @@
+# The single front door. Only this container publishes a port, so the EC2
+# security group needs 80 open and nothing else — backend, frontend and the
+# relay stay on the private compose network.
+#
+# SITE_ADDRESS defaults to :80, which is plain HTTP — an EC2 hostname cannot
+# get a certificate, because Let's Encrypt refuses *.compute.amazonaws.com by
+# policy. Set SITE_ADDRESS to your domain in .env and publish 443 in compose,
+# and Caddy obtains and renews the certificate itself. No edit to this file.
+
+{$SITE_ADDRESS} {
+	# The API. handle_path strips the prefix, so /api/signup arrives at the
+	# backend as /signup — every Express route is registered at the root.
+	handle_path /api/* {
+		reverse_proxy backend:3001
+	}
+
+	# The realtime relay. reverse_proxy passes the Upgrade handshake through
+	# untouched; the ws server accepts any path.
+	handle /ws* {
+		reverse_proxy websockets:3002
+	}
+
+	# Everything else is the app shell. Bun answers /* with index.html, so deep
+	# links like /boards/:id resolve without a fallback rule here.
+	handle {
+		reverse_proxy frontend:5173
+	}
+
+	encode gzip
+}

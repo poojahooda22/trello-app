@@ -1,0 +1,102 @@
+name: trello-app
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      # ":80" is plain HTTP on the instance IP. A bare domain here switches
+      # Caddy to HTTPS, with the certificate handled automatically.
+      SITE_ADDRESS: ${SITE_ADDRESS:-:80}
+    ports:
+      - "80:80"
+      # Uncomment once a real domain points here, so Caddy can serve and renew
+      # certificates. 443/udp is HTTP/3.
+      # - "443:443"
+      # - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+      websockets:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    image: ghcr.io/poojahooda22/trello-frontend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    environment:
+      # Read at container start, not baked in: Bun's HTML server inlines
+      # BUN_PUBLIC_* when it bundles on boot. Both are absolute and point at
+      # Caddy rather than a container, because the browser resolves them.
+      BUN_PUBLIC_API_URL: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env}/api
+      BUN_PUBLIC_WS_URL: ${PUBLIC_WS_ORIGIN:?set PUBLIC_WS_ORIGIN in .env}/ws
+    restart: unless-stopped
+
+  # Applies pending migrations and exits. The backend waits for it, so a deploy
+  # can never start an API against a schema that is behind. Reuses the backend
+  # image, which already carries the Prisma CLI and prisma/migrations.
+  migrate:
+    image: ghcr.io/poojahooda22/trello-backend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    working_dir: /app/packages/db
+    command: ["bunx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+    restart: "no"
+
+  backend:
+    image: ghcr.io/poojahooda22/trello-backend:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    environment:
+      # The code defaults to 3000; the image and the Caddyfile both say 3001.
+      PORT: 3001
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env}
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      # Decrypts every stored Slack webhook. Losing it orphans them all.
+      INTEGRATION_KEY: ${INTEGRATION_KEY:?set INTEGRATION_KEY in .env}
+      # Both the CORS origin and the base of every link sent to Slack and
+      # GitHub, so it must be the public address, never a container name.
+      APP_URL: ${PUBLIC_ORIGIN:?set PUBLIC_ORIGIN in .env}
+      WS_INTERNAL_URL: http://websockets:3003
+      WS_INTERNAL_TOKEN: ${WS_INTERNAL_TOKEN:?set WS_INTERNAL_TOKEN in .env}
+      # Optional: each feature logs a warning and degrades if left empty.
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+      GITHUB_APP_ID: ${GITHUB_APP_ID:-}
+      GITHUB_PRIVATE_KEY: ${GITHUB_PRIVATE_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      INVITE_FROM: ${INVITE_FROM:-}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      websockets:
+        condition: service_started
+    restart: unless-stopped
+
+  websockets:
+    image: ghcr.io/poojahooda22/trello-websockets:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      dockerfile: apps/websockets/Dockerfile
+    environment:
+      WS_PORT: 3002
+      # 3003 is the bridge the backend calls. It is never published.
+      WS_INTERNAL_PORT: 3003
+      # Signs the room tokens the backend mints, so it must be byte-identical
+      # to the backend's copy or every join is rejected.
+      WS_INTERNAL_TOKEN: ${WS_INTERNAL_TOKEN:?set WS_INTERNAL_TOKEN in .env}
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

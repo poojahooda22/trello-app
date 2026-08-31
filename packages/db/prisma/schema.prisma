@@ -67,44 +67,139 @@ model Invite {
   @@index([email])
 }
 
+// The five workflow columns every board starts with. Custom columns have no kind.
+enum SectionKind {
+  BACKLOG
+  TODO
+  INPROGRESS
+  REVIEW
+  DONE
+}
+
 model Board {
   id             String @id @default(uuid())
   title          String
   organizationId String
+  // Human-readable card keys: keyPrefix + per-board number, e.g. ZEP-7.
+  keyPrefix      String @default("BRD")
+  issueCounter   Int    @default(0)
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   sections     Section[]
+  issues       Issue[]
+  labels       Label[]
+  integrations BoardIntegration[]
 
+  @@unique([organizationId, keyPrefix])
   @@index([organizationId])
+}
+
+enum IntegrationProvider {
+  SLACK
+  GITHUB
+}
+
+// A board's connection to an outside service. `config` holds the provider's
+// secret (a Slack webhook URL) encrypted at rest — never returned to a client.
+model BoardIntegration {
+  id             String              @id @default(uuid())
+  boardId        String
+  provider       IntegrationProvider
+  // Provider secret, encrypted (Slack). Null for providers that need none.
+  config         String?
+  // Queryable public identifier: "owner/repo" for GitHub, so an incoming
+  // webhook can find its board. Null for Slack.
+  externalId     String?
+  installationId Int?
+  // GitHub only: also create a GitHub issue when a card is created here.
+  mirrorIssues   Boolean             @default(false)
+  label          String?
+  enabled        Boolean             @default(true)
+  lastEventAt    DateTime?
+  lastError      String?
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  board Board @relation(fields: [boardId], references: [id], onDelete: Cascade)
+
+  @@unique([boardId, provider])
+  // One repository belongs to at most one board, so a webhook is never ambiguous.
+  @@unique([provider, externalId])
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+// A tag on a board's cards ("bug", "design"). Colors are token names the UI
+// maps to its palette, so the theme stays in one place.
+model Label {
+  id      String @id @default(uuid())
+  boardId String
+  name    String
+  color   String @default("grey")
+
+  board  Board        @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  issues IssueLabel[]
+
+  @@unique([boardId, name])
+}
+
+model IssueLabel {
+  issueId String
+  labelId String
+
+  issue Issue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  label Label @relation(fields: [labelId], references: [id], onDelete: Cascade)
+
+  @@id([issueId, labelId])
+  @@index([labelId])
 }
 
 // A column on a board ("Upcoming", "In Progress", "Done").
 // position orders them left-to-right; gaps are intentional so a reorder is
 // one UPDATE to the midpoint rather than a renumber of every row.
 model Section {
-  id       String @id @default(uuid())
+  id       String       @id @default(uuid())
   title    String
   boardId  String
   position Float
+  kind     SectionKind?
 
   board  Board   @relation(fields: [boardId], references: [id], onDelete: Cascade)
   issues Issue[]
 
+  @@unique([boardId, kind])
   @@index([boardId, position])
 }
 
-// A card. Its section IS its status; the board is reached via section.
+// A card. Its section IS its status. boardId is denormalized so the per-board
+// number is unique and lookups by key (prefix + number) need no join.
 model Issue {
-  id          String  @id @default(uuid())
-  title       String
-  description String?
-  sectionId   String
-  position    Float
+  id           String    @id @default(uuid())
+  title        String
+  description  String?
+  sectionId    String
+  boardId      String
+  number       Int
+  position     Float
+  // Bumped on every write; clients drop events older than what they hold.
+  version      Int       @default(0)
+  // The GitHub issue this card mirrors, in the board's linked repository.
+  githubNumber Int?
+  priority     Priority?
 
   section   Section        @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  board     Board          @relation(fields: [boardId], references: [id], onDelete: Cascade)
   assignees IssueMapping[]
+  labels    IssueLabel[]
   comments  Comment[]
 
+  @@unique([boardId, number])
+  @@unique([boardId, githubNumber])
   @@index([sectionId, position])
 }
 

@@ -1,19 +1,15 @@
 import { useDroppable } from "@dnd-kit/react";
 import type { ReactNode } from "react";
 
-import { canMove, isColumnKey, type ColumnKey } from "@/lib/board";
+import type { SectionKind } from "@/lib/api";
+import { canMove, kindOf } from "@/lib/board";
 import { cn } from "@/lib/utils";
 
-/**
- * One droppable column. It is its own component (not inline in the route) so
- * that `useDroppable` runs exactly once at the top of a component — React needs
- * a fixed hook count per component — and so the hook sits *below*
- * <DragDropProvider> in the tree and finds the provider's manager.
- */
-export function BoardColumn({ id, children }: { id: ColumnKey; children: ReactNode }) {
+/** One droppable column. Its own component so useDroppable runs once per column, below DragDropProvider. */
+export function BoardColumn({ id, kind, children }: { id: string; kind: SectionKind | null; children: ReactNode }) {
   const { ref, isDropTarget } = useDroppable({
     id,
-    accept: (source) => isColumnKey(source.type) && canMove(source.type, id),
+    accept: (source) => canMove(kindOf(source.type), kind),
   });
 
   return (

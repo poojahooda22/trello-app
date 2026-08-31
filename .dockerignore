@@ -1,0 +1,41 @@
+# Everything the build context must never carry.
+#
+# Secrets first: every .env in this repo holds live credentials (Slack webhook,
+# INTEGRATION_KEY, GITHUB_PRIVATE_KEY, DATABASE_URL). A file copied into an
+# image stays in that layer even if a later step deletes it.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Installed per-image from the lockfile; copying the host's tree would be slow
+# and would carry platform-specific binaries into a Linux image.
+**/node_modules
+
+# Build output and caches — regenerated inside the image.
+**/dist
+**/out
+**/.turbo
+**/generated
+**/*.tsbuildinfo
+
+# Never needed at build time.
+.git
+.gitignore
+**/.DS_Store
+**/*.log
+.vscode
+.idea
+
+# Agent and tooling workspaces.
+.claude
+.agents
+.cursor
+.graphifyignore
+.mcp.json
+graphify-out
+
+# Docker's own files.
+Dockerfile
+**/Dockerfile
+docker-compose*.yml
+.dockerignore

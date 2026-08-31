@@ -14,6 +14,9 @@ import { Route as BoardsIndexRouteImport } from './routes/boards/index';
 import { Route as BoardsBoardIdRouteImport } from './routes/boards/$boardId';
 import { Route as SigninIndexRouteImport } from './routes/signin/index';
 import { Route as SignupIndexRouteImport } from './routes/signup/index';
+import { Route as BoardsBoardIdSettingsRouteImport } from './routes/boards/$boardId_.settings';
+import { Route as BoardsBoardIdIssuesIndexRouteImport } from './routes/boards/$boardId_.issues.index';
+import { Route as BoardsBoardIdIssuesIssueIdRouteImport } from './routes/boards/$boardId_.issues.$issueId';
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -40,6 +43,23 @@ const SignupIndexRoute = SignupIndexRouteImport.update({
   path: '/signup/',
   getParentRoute: () => rootRouteImport,
 } as any);
+const BoardsBoardIdSettingsRoute = BoardsBoardIdSettingsRouteImport.update({
+  id: '/boards/$boardId_/settings',
+  path: '/boards/$boardId/settings',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const BoardsBoardIdIssuesIndexRoute =
+  BoardsBoardIdIssuesIndexRouteImport.update({
+    id: '/boards/$boardId_/issues/',
+    path: '/boards/$boardId/issues/',
+    getParentRoute: () => rootRouteImport,
+  } as any);
+const BoardsBoardIdIssuesIssueIdRoute =
+  BoardsBoardIdIssuesIssueIdRouteImport.update({
+    id: '/boards/$boardId_/issues/$issueId',
+    path: '/boards/$boardId/issues/$issueId',
+    getParentRoute: () => rootRouteImport,
+  } as any);
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute;
@@ -47,6 +67,9 @@ export interface FileRoutesByFullPath {
   '/boards/': typeof BoardsIndexRoute;
   '/signin/': typeof SigninIndexRoute;
   '/signup/': typeof SignupIndexRoute;
+  '/boards/$boardId/settings': typeof BoardsBoardIdSettingsRoute;
+  '/boards/$boardId/issues/$issueId': typeof BoardsBoardIdIssuesIssueIdRoute;
+  '/boards/$boardId/issues/': typeof BoardsBoardIdIssuesIndexRoute;
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute;
@@ -54,6 +77,9 @@ export interface FileRoutesByTo {
   '/boards': typeof BoardsIndexRoute;
   '/signin': typeof SigninIndexRoute;
   '/signup': typeof SignupIndexRoute;
+  '/boards/$boardId/settings': typeof BoardsBoardIdSettingsRoute;
+  '/boards/$boardId/issues/$issueId': typeof BoardsBoardIdIssuesIssueIdRoute;
+  '/boards/$boardId/issues': typeof BoardsBoardIdIssuesIndexRoute;
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
@@ -62,19 +88,41 @@ export interface FileRoutesById {
   '/boards/': typeof BoardsIndexRoute;
   '/signin/': typeof SigninIndexRoute;
   '/signup/': typeof SignupIndexRoute;
+  '/boards/$boardId_/settings': typeof BoardsBoardIdSettingsRoute;
+  '/boards/$boardId_/issues/$issueId': typeof BoardsBoardIdIssuesIssueIdRoute;
+  '/boards/$boardId_/issues/': typeof BoardsBoardIdIssuesIndexRoute;
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
-  fullPaths: '/' | '/boards/$boardId' | '/boards/' | '/signin/' | '/signup/';
+  fullPaths:
+    | '/'
+    | '/boards/$boardId'
+    | '/boards/'
+    | '/signin/'
+    | '/signup/'
+    | '/boards/$boardId/settings'
+    | '/boards/$boardId/issues/$issueId'
+    | '/boards/$boardId/issues/';
   fileRoutesByTo: FileRoutesByTo;
-  to: '/' | '/boards/$boardId' | '/boards' | '/signin' | '/signup';
+  to:
+    | '/'
+    | '/boards/$boardId'
+    | '/boards'
+    | '/signin'
+    | '/signup'
+    | '/boards/$boardId/settings'
+    | '/boards/$boardId/issues/$issueId'
+    | '/boards/$boardId/issues';
   id:
     | '__root__'
     | '/'
     | '/boards/$boardId'
     | '/boards/'
     | '/signin/'
-    | '/signup/';
+    | '/signup/'
+    | '/boards/$boardId_/settings'
+    | '/boards/$boardId_/issues/$issueId'
+    | '/boards/$boardId_/issues/';
   fileRoutesById: FileRoutesById;
 }
 export interface RootRouteChildren {
@@ -83,6 +131,9 @@ export interface RootRouteChildren {
   BoardsIndexRoute: typeof BoardsIndexRoute;
   SigninIndexRoute: typeof SigninIndexRoute;
   SignupIndexRoute: typeof SignupIndexRoute;
+  BoardsBoardIdSettingsRoute: typeof BoardsBoardIdSettingsRoute;
+  BoardsBoardIdIssuesIssueIdRoute: typeof BoardsBoardIdIssuesIssueIdRoute;
+  BoardsBoardIdIssuesIndexRoute: typeof BoardsBoardIdIssuesIndexRoute;
 }
 
 declare module '@tanstack/react-router' {
@@ -122,6 +173,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SignupIndexRouteImport;
       parentRoute: typeof rootRouteImport;
     };
+    '/boards/$boardId_/settings': {
+      id: '/boards/$boardId_/settings';
+      path: '/boards/$boardId/settings';
+      fullPath: '/boards/$boardId/settings';
+      preLoaderRoute: typeof BoardsBoardIdSettingsRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/boards/$boardId_/issues/': {
+      id: '/boards/$boardId_/issues/';
+      path: '/boards/$boardId/issues';
+      fullPath: '/boards/$boardId/issues/';
+      preLoaderRoute: typeof BoardsBoardIdIssuesIndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/boards/$boardId_/issues/$issueId': {
+      id: '/boards/$boardId_/issues/$issueId';
+      path: '/boards/$boardId/issues/$issueId';
+      fullPath: '/boards/$boardId/issues/$issueId';
+      preLoaderRoute: typeof BoardsBoardIdIssuesIssueIdRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
   }
 }
 
@@ -131,6 +203,9 @@ const rootRouteChildren: RootRouteChildren = {
   BoardsIndexRoute: BoardsIndexRoute,
   SigninIndexRoute: SigninIndexRoute,
   SignupIndexRoute: SignupIndexRoute,
+  BoardsBoardIdSettingsRoute: BoardsBoardIdSettingsRoute,
+  BoardsBoardIdIssuesIssueIdRoute: BoardsBoardIdIssuesIssueIdRoute,
+  BoardsBoardIdIssuesIndexRoute: BoardsBoardIdIssuesIndexRoute,
 };
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

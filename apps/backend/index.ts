@@ -8,15 +8,53 @@ import { Resend } from "resend";
 import { prisma } from "db/client";
 import {
   RecentDeliveries,
+  issuesEvent,
+  planForIssue,
   planMoveForPullRequest,
   pullRequestEvent,
   verifyGitHubSignature,
   type CardMove,
+  type IssuePlan,
 } from "./github-webhook";
-
-// ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
+import {
+  DEFAULT_SECTIONS,
+  LABEL_COLORS,
+  PRIORITIES,
+  canMove,
+  issueKey,
+  keyPrefixFor,
+  parseIssueKey,
+  type IssueDto,
+  type LabelDto,
+  type UserRef,
+} from "./board-rules";
+import { mintRoomToken, publish } from "./realtime";
+import {
+  REPO_PATTERN,
+  SLACK_WEBHOOK_PATTERN,
+  boardForRepo,
+  boardLink,
+  canonicalRepo,
+  connectGitHub,
+  connectSlack,
+  disconnect,
+  escapeSlack,
+  listIntegrations,
+  notifyBoard,
+  recordGitHub,
+  repoForBoard,
+  sendSlack,
+  setEnabled,
+  setMirrorIssues,
+} from "./integrations";
+import {
+  createGitHubIssue,
+  findInstallationForRepo,
+  githubAppConfigured,
+  listOpenPullRequests,
+  setGitHubIssueState,
+} from "./github-app";
+import { encryptionAvailable } from "./secrets";
 
 /** Fail at boot, not on the first request that needs the value. */
 function requireEnv(name: string): string {
@@ -35,20 +73,11 @@ const INVITE_FROM = process.env.INVITE_FROM ?? "onboarding@resend.dev";
 const TOKEN_TTL = "7d";
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
-// GitHub App webhook secret (set the same value on the App's settings page) and
-// the socket server's internal endpoint, which owns the in-memory board today.
 const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET;
-const WS_INTERNAL_URL = process.env.WS_INTERNAL_URL ?? "http://localhost:3003";
-const WS_INTERNAL_TOKEN = process.env.WS_INTERNAL_TOKEN;
 if (!GITHUB_WEBHOOK_SECRET) {
   console.warn("GITHUB_WEBHOOK_SECRET not set — POST /webhooks/github answers 503 until it is.");
 }
-if (!WS_INTERNAL_TOKEN) {
-  console.warn("WS_INTERNAL_TOKEN not set — GitHub events cannot reach the socket server.");
-}
 
-// Gaps between positions are deliberate: dropping a card between two others is
-// one UPDATE to the midpoint instead of renumbering every row below it.
 const POSITION_GAP = 1000;
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
@@ -68,14 +97,9 @@ declare global {
 
 declare module "http" {
   interface IncomingMessage {
-    /** The exact bytes received; webhook signatures are computed over these. */
     rawBody?: Buffer;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Errors and validation
-// ---------------------------------------------------------------------------
 
 class HttpError extends Error {
   constructor(
@@ -97,10 +121,6 @@ function parse<T extends z.ZodType>(schema: T, data: unknown, what: string): z.i
   return result.data;
 }
 
-/**
- * Narrows req.userId without a cast. requireAuth always sets it before any
- * handler runs, so this throwing means a route was mounted unguarded.
- */
 function auth(req: Request): string {
   if (!req.userId) throw new HttpError(401, "Authentication required");
   return req.userId;
@@ -211,6 +231,179 @@ async function nextIssuePosition(sectionId: string): Promise<number> {
     select: { position: true },
   });
   return (last?.position ?? 0) + POSITION_GAP;
+}
+
+const issueSelect = {
+  id: true,
+  number: true,
+  title: true,
+  description: true,
+  position: true,
+  sectionId: true,
+  boardId: true,
+  version: true,
+  githubNumber: true,
+  priority: true,
+  board: { select: { keyPrefix: true } },
+  assignees: { select: { user: { select: { id: true, email: true } } } },
+  labels: { select: { label: { select: { id: true, name: true, color: true } } } },
+} as const;
+
+type IssueRow = Omit<IssueDto, "key" | "assignees" | "labels"> & {
+  board: { keyPrefix: string };
+  assignees: { user: UserRef }[];
+  labels: { label: LabelDto }[];
+};
+
+/** Flattens the join rows so clients get plain arrays, not `{ user: … }` wrappers. */
+function toIssueDto({ board, assignees, labels, ...issue }: IssueRow): IssueDto {
+  return {
+    ...issue,
+    key: issueKey(board.keyPrefix, issue.number),
+    assignees: assignees.map((a) => a.user),
+    labels: labels.map((l) => l.label),
+  };
+}
+
+/** Boards created before columns had kinds get the five defaults on first read. */
+async function ensureDefaultSections(boardId: string): Promise<void> {
+  const kinded = await prisma.section.count({ where: { boardId, kind: { not: null } } });
+  if (kinded > 0) return;
+  // Appended after any existing custom columns so positions never collide.
+  const start = await nextSectionPosition(boardId);
+  await prisma.section.createMany({
+    data: DEFAULT_SECTIONS.map((s, i) => ({ boardId, title: s.title, kind: s.kind, position: start + i * POSITION_GAP })),
+    skipDuplicates: true,
+  });
+}
+
+/** ZEP, then ZEP2, ZEP3… so two boards in one organization never share card keys. */
+async function uniqueKeyPrefix(orgId: string, title: string): Promise<string> {
+  const base = keyPrefixFor(title);
+  const boards = await prisma.board.findMany({ where: { organizationId: orgId }, select: { keyPrefix: true } });
+  const taken = new Set(boards.map((b) => b.keyPrefix));
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) {
+    if (!taken.has(`${base}${n}`)) return `${base}${n}`;
+  }
+}
+
+/**
+ * The one place a card is created, whether a person added it or a GitHub issue
+ * arrived. One UPDATE hands out the next number, and its row lock serializes
+ * creates per board so the position read cannot tie.
+ */
+async function createCard(input: {
+  boardId: string;
+  sectionId: string;
+  title: string;
+  description: string | null;
+  githubNumber?: number;
+}): Promise<IssueDto> {
+  return toIssueDto(
+    await prisma.$transaction(async (tx) => {
+      const { issueCounter } = await tx.board.update({
+        where: { id: input.boardId },
+        data: { issueCounter: { increment: 1 } },
+        select: { issueCounter: true },
+      });
+      const last = await tx.issue.findFirst({
+        where: { sectionId: input.sectionId },
+        orderBy: { position: "desc" },
+        select: { position: true },
+      });
+      return tx.issue.create({
+        data: {
+          sectionId: input.sectionId,
+          boardId: input.boardId,
+          number: issueCounter,
+          title: input.title,
+          description: input.description,
+          githubNumber: input.githubNumber ?? null,
+          position: (last?.position ?? 0) + POSITION_GAP,
+        },
+        select: issueSelect,
+      });
+    }),
+  );
+}
+
+/**
+ * The one place an issue changes column. Users go through the transition table;
+ * automation (GitHub) may jump straight to Review or Done.
+ */
+async function moveIssueTo(
+  issueId: string,
+  sectionId: string,
+  opts: {
+    position?: number;
+    enforceRules: boolean;
+    reason?: string;
+    /**
+     * The GitHub issue number whose event caused this move. Only that issue's
+     * own state is left alone; a move caused by a *pull request* still closes
+     * the linked issue, which is the whole point of merging.
+     */
+    echoOfIssue?: number;
+  },
+): Promise<IssueDto> {
+  const [issue, target] = await Promise.all([
+    prisma.issue.findUnique({
+      where: { id: issueId },
+      select: { ...issueSelect, section: { select: { kind: true, title: true } } },
+    }),
+    prisma.section.findUnique({ where: { id: sectionId }, select: { boardId: true, kind: true, title: true } }),
+  ]);
+  if (!issue || !target) throw new HttpError(404, "Not found");
+  if (issue.boardId !== target.boardId) throw new HttpError(400, "Cannot move an issue to another board");
+  if (opts.enforceRules && !canMove(issue.section.kind, target.kind)) {
+    throw new HttpError(409, `Cannot move a card from ${issue.section.title} to ${target.title}`);
+  }
+
+  const position = opts.position ?? (await nextIssuePosition(sectionId));
+  // Guarded write: it only lands if the card is still where the check saw it,
+  // so two racing moves cannot combine into a transition the table forbids.
+  const { count } = await prisma.issue.updateMany({
+    where: { id: issueId, sectionId: issue.sectionId },
+    data: { sectionId, position, version: { increment: 1 } },
+  });
+  if (count === 0) throw new HttpError(409, "The card was moved by someone else — reload and try again");
+
+  const updated = toIssueDto(await prisma.issue.findUniqueOrThrow({ where: { id: issueId }, select: issueSelect }));
+  publish(updated.boardId, { type: "issue_moved", issue: updated });
+  if (issue.sectionId !== sectionId) {
+    const why = opts.reason ? ` — ${escapeSlack(opts.reason)}` : "";
+    // The title links to the board, so the message is one click from the work.
+    notifyBoard(
+      updated.boardId,
+      `${updated.key} · ${boardLink(updated.boardId, updated.title)} moved ${escapeSlack(issue.section.title)} → ${escapeSlack(target.title)}${why}`,
+    );
+    // Dragging a mirrored card into Done closes its GitHub issue (and out of
+    // Done, back into a workflow column, reopens it). Two guards: the event
+    // that came from this very issue is not echoed back, and a move into a
+    // custom column says nothing about whether the work is done.
+    const crossesDone = target.kind === "DONE" || (issue.section.kind === "DONE" && target.kind !== null);
+    if (updated.githubNumber !== null && updated.githubNumber !== opts.echoOfIssue && crossesDone) {
+      void syncGitHubIssueState(updated, target.kind === "DONE" ? "closed" : "open");
+    }
+  }
+  return updated;
+}
+
+/** Mirrors a card's Done/not-Done state onto its GitHub issue. */
+async function syncGitHubIssueState(issue: IssueDto, state: "open" | "closed"): Promise<void> {
+  if (issue.githubNumber === null) return;
+  try {
+    const link = await repoForBoard(issue.boardId);
+    if (!link?.enabled || !link.mirrorIssues || link.installationId === null) return;
+    await setGitHubIssueState(link.installationId, link.fullName, issue.githubNumber, state);
+    await recordGitHub(issue.boardId, null);
+    console.log(`[github] ${issue.key} → issue #${issue.githubNumber} ${state}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordGitHub(issue.boardId, `Updating GitHub issue #${issue.githubNumber} failed: ${message}`).catch(() => {});
+    console.error(`[github] ${issue.key}: ${message}`);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -495,10 +688,27 @@ app.post("/boards", requireAuth, async (req, res) => {
   const body = parse(z.object({ orgId: z.uuid(), title }), req.body, "body");
   await requireMember(auth(req), body.orgId);
 
-  const board = await prisma.board.create({
-    data: { title: body.title, organizationId: body.orgId },
-    select: { id: true, title: true, organizationId: true },
-  });
+  // (organizationId, keyPrefix) is unique in the database; when two same-title
+  // boards are created at once the loser re-reads and takes the next suffix.
+  let board;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      board = await prisma.board.create({
+        data: {
+          title: body.title,
+          organizationId: body.orgId,
+          keyPrefix: await uniqueKeyPrefix(body.orgId, body.title),
+          sections: {
+            create: DEFAULT_SECTIONS.map((s, i) => ({ title: s.title, kind: s.kind, position: (i + 1) * POSITION_GAP })),
+          },
+        },
+        select: { id: true, title: true, organizationId: true, keyPrefix: true },
+      });
+      break;
+    } catch (err) {
+      if (!isPrismaError(err, "P2002") || attempt >= 3) throw err;
+    }
+  }
   res.status(201).json(board);
 });
 
@@ -526,24 +736,31 @@ app.delete("/board/:boardId", requireAuth, async (req, res) => {
 // --- Sections ---------------------------------------------------------------
 
 app.get("/sections", requireAuth, async (req, res) => {
+  const userId = auth(req);
   const { boardId } = parse(boardIdParam, req.query, "query");
-  await requireMember(auth(req), await orgOfBoard(boardId));
+  await requireMember(userId, await orgOfBoard(boardId));
 
-  // Issues are nested so the whole board renders from one round trip.
+  await ensureDefaultSections(boardId);
+  // Issues are nested so the whole board renders from one round trip. The
+  // roomToken is the tab's proof of membership for the socket relay.
   const sections = await prisma.section.findMany({
     where: { boardId },
-    orderBy: { position: "asc" },
+    orderBy: [{ position: "asc" }, { id: "asc" }],
     select: {
       id: true,
       title: true,
+      kind: true,
       position: true,
-      issues: {
-        orderBy: { position: "asc" },
-        select: { id: true, title: true, description: true, position: true },
-      },
+      issues: { orderBy: [{ position: "asc" }, { number: "asc" }], select: issueSelect },
     },
   });
-  res.json(sections);
+  // The token carries the caller's identity so board presence shows real
+  // users (the "random id" placeholder in the old socket server is gone).
+  const me = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+  res.json({
+    roomToken: me ? mintRoomToken(boardId, { id: userId, email: me.email }) : "",
+    sections: sections.map((s) => ({ ...s, issues: s.issues.map(toIssueDto) })),
+  });
 });
 
 app.post("/section", requireAuth, async (req, res) => {
@@ -556,8 +773,9 @@ app.post("/section", requireAuth, async (req, res) => {
       title: body.title,
       position: await nextSectionPosition(body.boardId),
     },
-    select: { id: true, title: true, boardId: true, position: true },
+    select: { id: true, title: true, kind: true, boardId: true, position: true },
   });
+  publish(section.boardId, { type: "section_added", section });
   res.status(201).json(section);
 });
 
@@ -577,8 +795,9 @@ app.put("/section/:sectionId", requireAuth, async (req, res) => {
   const section = await prisma.section.update({
     where: { id: sectionId },
     data: { title: body.title, position: body.position },
-    select: { id: true, title: true, boardId: true, position: true },
+    select: { id: true, title: true, kind: true, boardId: true, position: true },
   });
+  publish(section.boardId, { type: "section_updated", section });
   res.json(section);
 });
 
@@ -586,12 +805,17 @@ app.delete("/section/:sectionId", requireAuth, async (req, res) => {
   const { sectionId } = parse(sectionIdParam, req.params, "URL parameters");
   await requireMember(auth(req), await orgOfSection(sectionId));
 
+  const section = await prisma.section.findUnique({ where: { id: sectionId }, select: { kind: true, boardId: true } });
+  if (!section) throw new HttpError(404, "Not found");
+  // The five workflow columns are the contract the automation depends on.
+  if (section.kind !== null) throw new HttpError(409, "Default columns cannot be deleted");
+
   // Cascades to the issues in the column.
   await prisma.section.delete({ where: { id: sectionId } });
+  publish(section.boardId, { type: "section_deleted", sectionId });
   res.status(204).end();
 });
 
-// --- Issues -----------------------------------------------------------------
 
 app.get("/issues", requireAuth, async (req, res) => {
   const userId = auth(req);
@@ -605,35 +829,25 @@ app.get("/issues", requireAuth, async (req, res) => {
     "query",
   );
 
-  const fields = {
-    id: true,
-    title: true,
-    description: true,
-    position: true,
-    sectionId: true,
-  } as const;
-
   if (sectionId !== undefined) {
     await requireMember(userId, await orgOfSection(sectionId));
-    res.json(
-      await prisma.issue.findMany({
-        where: { sectionId },
-        orderBy: { position: "asc" },
-        select: fields,
-      }),
-    );
+    const rows = await prisma.issue.findMany({
+      where: { sectionId },
+      orderBy: [{ position: "asc" }, { number: "asc" }],
+      select: issueSelect,
+    });
+    res.json(rows.map(toIssueDto));
     return;
   }
 
   if (boardId !== undefined) {
     await requireMember(userId, await orgOfBoard(boardId));
-    res.json(
-      await prisma.issue.findMany({
-        where: { section: { boardId } },
-        orderBy: [{ section: { position: "asc" } }, { position: "asc" }],
-        select: fields,
-      }),
-    );
+    const rows = await prisma.issue.findMany({
+      where: { boardId },
+      orderBy: [{ section: { position: "asc" } }, { position: "asc" }, { number: "asc" }],
+      select: issueSelect,
+    });
+    res.json(rows.map(toIssueDto));
     return;
   }
 
@@ -646,22 +860,64 @@ app.post("/issue", requireAuth, async (req, res) => {
     req.body,
     "body",
   );
-  await requireMember(auth(req), await orgOfSection(body.sectionId));
-
-  const issue = await prisma.issue.create({
-    data: {
-      sectionId: body.sectionId,
-      title: body.title,
-      description: body.description,
-      position: await nextIssuePosition(body.sectionId),
-    },
-    select: { id: true, title: true, description: true, sectionId: true, position: true },
+  const section = await prisma.section.findUnique({
+    where: { id: body.sectionId },
+    select: { boardId: true, title: true, board: { select: { organizationId: true } } },
   });
+  if (!section) throw new HttpError(404, "Not found");
+  await requireMember(auth(req), section.board.organizationId);
+
+  const issue = await createCard({
+    boardId: section.boardId,
+    sectionId: body.sectionId,
+    title: body.title,
+    description: body.description ?? null,
+  });
+  publish(issue.boardId, { type: "issue_added", issue });
+  notifyBoard(
+    issue.boardId,
+    `${issue.key} · New card in *${escapeSlack(section.title)}*: ${boardLink(issue.boardId, issue.title)}`,
+  );
+  // If the board mirrors to GitHub, the issue is created there too. Off the
+  // response path: the card already exists, and GitHub must not delay it.
+  void mirrorCardToGitHub(issue);
   res.status(201).json(issue);
 });
 
-// Registered before /issue/:issueId — Express matches in registration order, so
-// the literal path has to win before ":issueId" swallows the word "move".
+/**
+ * Creates the GitHub issue for a new card when the board is bound to a
+ * repository with mirroring on. The resulting `issues.opened` webhook finds the
+ * card already carrying this number and updates it instead of duplicating it.
+ */
+async function mirrorCardToGitHub(issue: IssueDto): Promise<void> {
+  try {
+    const link = await repoForBoard(issue.boardId);
+    if (!link?.enabled || !link.mirrorIssues || link.installationId === null) return;
+
+    const created = await createGitHubIssue(link.installationId, link.fullName, {
+      title: issue.title,
+      body: `${issue.description ?? ""}\n\n---\nTracked as **${issue.key}** on ${APP_URL}/boards/${issue.boardId}`.trim(),
+    });
+    // GitHub may deliver issues.opened before this write lands. Claiming the
+    // number only while the card is still unlinked makes the two orders agree.
+    const { count } = await prisma.issue.updateMany({
+      where: { id: issue.id, githubNumber: null },
+      data: { githubNumber: created.number, version: { increment: 1 } },
+    });
+    if (count === 0) {
+      console.log(`[github] ${issue.key} was already linked while creating issue #${created.number} — left as is`);
+      return;
+    }
+    await publishIssue(issue.id); // publishes the linked card to open boards
+    await recordGitHub(issue.boardId, null);
+    console.log(`[github] ${issue.key} → created issue #${created.number} in ${link.fullName}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordGitHub(issue.boardId, `Creating the GitHub issue failed: ${message}`).catch(() => {});
+    console.error(`[github] mirroring ${issue.key} failed:`, message);
+  }
+}
+
 app.put("/issue/move", requireAuth, async (req, res) => {
   const userId = auth(req);
   const body = parse(
@@ -670,26 +926,11 @@ app.put("/issue/move", requireAuth, async (req, res) => {
     "body",
   );
 
-  const [fromOrg, toOrg] = await Promise.all([
-    orgOfIssue(body.issueId),
-    orgOfSection(body.sectionId),
-  ]);
-  await requireMember(userId, fromOrg);
-  // Dragging a card into a different organization is never legitimate.
-  if (fromOrg !== toOrg) throw new HttpError(403, "Cannot move an issue into another organization");
-
-  // The client sends the midpoint of the two cards it dropped between; with no
-  // position we append to the end of the target column.
-  const position = body.position ?? (await nextIssuePosition(body.sectionId));
-
-  const issue = await prisma.issue.update({
-    where: { id: body.issueId },
-    data: { sectionId: body.sectionId, position },
-    select: { id: true, title: true, description: true, sectionId: true, position: true },
-  });
-  res.json(issue);
+  await requireMember(userId, await orgOfIssue(body.issueId));
+  res.json(await moveIssueTo(body.issueId, body.sectionId, { position: body.position, enforceRules: true }));
 });
 
+/** Everything the issue detail page shows in one request. */
 app.get("/issue/:issueId", requireAuth, async (req, res) => {
   const { issueId } = parse(issueIdParam, req.params, "URL parameters");
   await requireMember(auth(req), await orgOfIssue(issueId));
@@ -697,26 +938,129 @@ app.get("/issue/:issueId", requireAuth, async (req, res) => {
   const issue = await prisma.issue.findUnique({
     where: { id: issueId },
     select: {
-      id: true,
-      title: true,
-      description: true,
-      position: true,
-      section: { select: { id: true, title: true, boardId: true } },
-      assignees: { select: { user: { select: { id: true, email: true } } } },
+      ...issueSelect,
+      section: { select: { id: true, title: true, kind: true } },
+      board: { select: { keyPrefix: true, organizationId: true, title: true } },
       comments: {
         orderBy: { createdAt: "asc" },
-        select: {
-          id: true,
-          content: true,
-          createdAt: true,
-          user: { select: { id: true, email: true } },
-        },
+        select: { id: true, content: true, createdAt: true, user: { select: { id: true, email: true } } },
       },
     },
   });
   if (!issue) throw new HttpError(404, "Not found");
 
-  res.json({ ...issue, assignees: issue.assignees.map((a) => a.user) });
+  const { comments, section, ...row } = issue;
+  const link = await repoForBoard(row.boardId);
+  res.json({
+    ...toIssueDto(row),
+    section,
+    comments,
+    // The page needs the workspace to offer its members as assignees.
+    organizationId: row.board.organizationId,
+    boardTitle: row.board.title,
+    // Where this card lives outside the board, so the page can link out.
+    repository: link?.fullName ?? null,
+    githubUrl: link && row.githubNumber !== null ? `https://github.com/${link.fullName}/issues/${row.githubNumber}` : null,
+  });
+});
+
+// --- Assignees, labels and priority ------------------------------------------
+
+/** Publishes the card so every open board reflects the change immediately. */
+async function publishIssue(issueId: string): Promise<IssueDto> {
+  const issue = toIssueDto(await prisma.issue.findUniqueOrThrow({ where: { id: issueId }, select: issueSelect }));
+  publish(issue.boardId, { type: "issue_updated", issue });
+  return issue;
+}
+
+app.post("/issue/:issueId/assignee", requireAuth, async (req, res) => {
+  const { issueId } = parse(issueIdParam, req.params, "URL parameters");
+  const body = parse(z.object({ userId: z.uuid() }), req.body, "body");
+  const orgId = await orgOfIssue(issueId);
+  await requireMember(auth(req), orgId);
+  // Only someone already in the organization can be assigned its work.
+  await requireMember(body.userId, orgId).catch(() => {
+    throw new HttpError(400, "That user is not a member of this workspace");
+  });
+
+  await prisma.issueMapping.upsert({
+    where: { userId_issueId: { userId: body.userId, issueId } },
+    create: { userId: body.userId, issueId },
+    update: {},
+  });
+  res.json(await publishIssue(issueId));
+});
+
+app.delete("/issue/:issueId/assignee/:userId", requireAuth, async (req, res) => {
+  const { issueId } = parse(issueIdParam, req.params, "URL parameters");
+  const { userId } = parse(z.object({ userId: z.uuid() }), req.params, "URL parameters");
+  await requireMember(auth(req), await orgOfIssue(issueId));
+
+  await prisma.issueMapping.deleteMany({ where: { issueId, userId } });
+  res.json(await publishIssue(issueId));
+});
+
+app.get("/board/:boardId/labels", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  await requireMember(auth(req), await orgOfBoard(boardId));
+  res.json(await prisma.label.findMany({ where: { boardId }, orderBy: { name: "asc" } }));
+});
+
+app.post("/board/:boardId/label", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  const body = parse(
+    z.object({ name: z.string().min(1).max(40), color: z.enum(LABEL_COLORS).optional() }),
+    req.body,
+    "body",
+  );
+  await requireMember(auth(req), await orgOfBoard(boardId));
+
+  const label = await prisma.label.upsert({
+    where: { boardId_name: { boardId, name: body.name } },
+    create: { boardId, name: body.name, color: body.color ?? "grey" },
+    update: { color: body.color ?? undefined },
+  });
+  res.status(201).json(label);
+});
+
+app.delete("/label/:labelId", requireAuth, async (req, res) => {
+  const { labelId } = parse(z.object({ labelId: z.uuid() }), req.params, "URL parameters");
+  const label = await prisma.label.findUnique({ where: { id: labelId }, select: { boardId: true } });
+  if (!label) throw new HttpError(404, "Not found");
+  await requireMember(auth(req), await orgOfBoard(label.boardId));
+
+  await prisma.label.delete({ where: { id: labelId } });
+  res.status(204).end();
+});
+
+app.post("/issue/:issueId/label", requireAuth, async (req, res) => {
+  const { issueId } = parse(issueIdParam, req.params, "URL parameters");
+  const body = parse(z.object({ labelId: z.uuid() }), req.body, "body");
+  await requireMember(auth(req), await orgOfIssue(issueId));
+
+  const [issue, label] = await Promise.all([
+    prisma.issue.findUnique({ where: { id: issueId }, select: { boardId: true } }),
+    prisma.label.findUnique({ where: { id: body.labelId }, select: { boardId: true } }),
+  ]);
+  if (!issue || !label) throw new HttpError(404, "Not found");
+  // A label belongs to one board; it must not travel to another's cards.
+  if (issue.boardId !== label.boardId) throw new HttpError(400, "That label belongs to another board");
+
+  await prisma.issueLabel.upsert({
+    where: { issueId_labelId: { issueId, labelId: body.labelId } },
+    create: { issueId, labelId: body.labelId },
+    update: {},
+  });
+  res.json(await publishIssue(issueId));
+});
+
+app.delete("/issue/:issueId/label/:labelId", requireAuth, async (req, res) => {
+  const { issueId } = parse(issueIdParam, req.params, "URL parameters");
+  const { labelId } = parse(z.object({ labelId: z.uuid() }), req.params, "URL parameters");
+  await requireMember(auth(req), await orgOfIssue(issueId));
+
+  await prisma.issueLabel.deleteMany({ where: { issueId, labelId } });
+  res.json(await publishIssue(issueId));
 });
 
 app.put("/issue/:issueId", requireAuth, async (req, res) => {
@@ -726,20 +1070,29 @@ app.put("/issue/:issueId", requireAuth, async (req, res) => {
       .object({
         title: title.optional(),
         description: z.string().max(10_000).nullable().optional(),
+        priority: z.enum(PRIORITIES).nullable().optional(),
       })
-      .refine((v) => v.title !== undefined || v.description !== undefined, {
-        message: "Provide at least one of title or description",
+      .refine((v) => v.title !== undefined || v.description !== undefined || v.priority !== undefined, {
+        message: "Provide at least one of title, description or priority",
       }),
     req.body,
     "body",
   );
   await requireMember(auth(req), await orgOfIssue(issueId));
 
-  const issue = await prisma.issue.update({
-    where: { id: issueId },
-    data: { title: body.title, description: body.description },
-    select: { id: true, title: true, description: true, sectionId: true, position: true },
-  });
+  const issue = toIssueDto(
+    await prisma.issue.update({
+      where: { id: issueId },
+      data: {
+        title: body.title,
+        description: body.description,
+        priority: body.priority,
+        version: { increment: 1 },
+      },
+      select: issueSelect,
+    }),
+  );
+  publish(issue.boardId, { type: "issue_updated", issue });
   res.json(issue);
 });
 
@@ -747,7 +1100,10 @@ app.delete("/issue/:issueId", requireAuth, async (req, res) => {
   const { issueId } = parse(issueIdParam, req.params, "URL parameters");
   await requireMember(auth(req), await orgOfIssue(issueId));
 
+  const existing = await prisma.issue.findUnique({ where: { id: issueId }, select: { boardId: true } });
+  if (!existing) throw new HttpError(404, "Not found");
   await prisma.issue.delete({ where: { id: issueId } });
+  publish(existing.boardId, { type: "issue_deleted", issueId });
   res.status(204).end();
 });
 
@@ -823,6 +1179,177 @@ app.delete("/comment/:commentId", requireAuth, async (req, res) => {
   res.status(204).end();
 });
 
+// --- Integrations -----------------------------------------------------------
+// A board's own Slack connection. The webhook URL is a credential: it is
+// encrypted at rest and never sent back — the UI gets a masked hint instead.
+
+const slackConnect = z.object({
+  webhookUrl: z.string().regex(SLACK_WEBHOOK_PATTERN, "Must be a https://hooks.slack.com/services/… URL"),
+  label: z.string().max(80).optional(),
+});
+
+/** Integrations are org-wide plumbing, so only admins may change them. */
+async function requireBoardAdmin(req: Request, boardId: string) {
+  await requireMember(auth(req), await orgOfBoard(boardId), { admin: true });
+  if (!encryptionAvailable) throw new HttpError(503, "INTEGRATION_KEY is not configured on the server");
+}
+
+app.get("/board/:boardId/integrations", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  await requireMember(auth(req), await orgOfBoard(boardId));
+  res.json(await listIntegrations(boardId));
+});
+
+app.put("/board/:boardId/integration/slack", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  const body = parse(slackConnect, req.body, "body");
+  await requireBoardAdmin(req, boardId);
+
+  await connectSlack(boardId, body.webhookUrl, body.label?.trim() || null);
+  res.json(await listIntegrations(boardId));
+});
+
+app.post("/board/:boardId/integration/slack/test", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  await requireBoardAdmin(req, boardId);
+
+  const board = await prisma.board.findUnique({ where: { id: boardId }, select: { title: true } });
+  const result = await sendSlack(boardId, `✅ *${escapeSlack(board?.title ?? "This board")}* is connected to this channel.`);
+  // "Nothing was sent" must never be reported as a delivery.
+  const error =
+    result.status === "failed"
+      ? result.error
+      : result.status === "skipped"
+        ? result.reason === "paused"
+          ? "Slack is paused for this board — resume it first"
+          : "Slack is not connected to this board"
+        : null;
+  res.json({ ok: result.status === "sent", error, integrations: await listIntegrations(boardId) });
+});
+
+const githubConnect = z.object({
+  repository: z.string().regex(REPO_PATTERN, 'Must be "owner/repo"'),
+  mirrorIssues: z.boolean().optional(),
+});
+
+app.put("/board/:boardId/integration/github", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  const body = parse(githubConnect, req.body, "body");
+  await requireBoardAdmin(req, boardId);
+
+  // Bound elsewhere already? Refuse rather than silently stealing the link:
+  // one repository feeding two boards would double every card. Compared in
+  // GitHub's own case-insensitive terms, so "Acme/API" cannot slip past.
+  const repository = canonicalRepo(body.repository);
+  const existing = await boardForRepo(repository);
+  if (existing && existing.boardId !== boardId) {
+    throw new HttpError(409, "That repository is already linked to another board");
+  }
+
+  // Knowing the installation is what makes writes possible; without the App
+  // credentials the link still works for incoming webhooks.
+  let installationId: number | null = null;
+  let warning: string | null = null;
+  if (githubAppConfigured) {
+    try {
+      installationId = await findInstallationForRepo(repository);
+      if (installationId === null) warning = "The GitHub App is not installed on that repository yet.";
+    } catch (err) {
+      // Leaves installationId null, which connectGitHub reads as "unknown" and
+      // does not write over a good value it already had.
+      warning = `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  } else {
+    warning = "GITHUB_APP_ID / GITHUB_PRIVATE_KEY are not set, so cards cannot be pushed to GitHub.";
+  }
+
+  await connectGitHub(boardId, repository, installationId, body.mirrorIssues ?? false);
+  res.json({ integrations: await listIntegrations(boardId), warning });
+});
+
+app.get("/board/:boardId/github/pulls", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  await requireMember(auth(req), await orgOfBoard(boardId));
+
+  const link = await repoForBoard(boardId);
+  if (!link || link.installationId === null) {
+    res.json({ repository: link?.fullName ?? null, pulls: [] });
+    return;
+  }
+  try {
+    res.json({ repository: link.fullName, pulls: await listOpenPullRequests(link.installationId, link.fullName) });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordGitHub(boardId, `Listing pull requests failed: ${message}`);
+    throw new HttpError(502, `GitHub: ${message}`);
+  }
+});
+
+/** Pushes an existing card to GitHub as an issue, so the repo side can see it. */
+app.post("/issue/:issueId/github", requireAuth, async (req, res) => {
+  const { issueId } = parse(issueIdParam, req.params, "URL parameters");
+  await requireMember(auth(req), await orgOfIssue(issueId));
+
+  const card = toIssueDto(await prisma.issue.findUniqueOrThrow({ where: { id: issueId }, select: issueSelect }));
+  if (card.githubNumber !== null) throw new HttpError(409, "That card is already linked to a GitHub issue");
+
+  const link = await repoForBoard(card.boardId);
+  if (!link) throw new HttpError(409, "This board has no linked repository");
+  if (link.installationId === null) throw new HttpError(409, "The GitHub App is not installed on that repository");
+
+  try {
+    const created = await createGitHubIssue(link.installationId, link.fullName, {
+      title: card.title,
+      body: `${card.description ?? ""}\n\n---\nTracked as **${card.key}** on ${APP_URL}/boards/${card.boardId}`.trim(),
+    });
+    const updated = toIssueDto(
+      await prisma.issue.update({
+        where: { id: issueId },
+        data: { githubNumber: created.number, version: { increment: 1 } },
+        select: issueSelect,
+      }),
+    );
+    publish(updated.boardId, { type: "issue_updated", issue: updated });
+    await recordGitHub(card.boardId, null);
+    res.status(201).json({ issue: updated, url: created.htmlUrl });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordGitHub(card.boardId, `Creating the GitHub issue failed: ${message}`);
+    throw new HttpError(502, `GitHub: ${message}`);
+  }
+});
+
+/** The mirror flag alone — toggling it must not re-run repository binding. */
+app.patch("/board/:boardId/integration/github/mirror", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  const body = parse(z.object({ mirrorIssues: z.boolean() }), req.body, "body");
+  await requireBoardAdmin(req, boardId);
+
+  const link = await repoForBoard(boardId);
+  if (!link) throw new HttpError(409, "This board has no linked repository");
+  await setMirrorIssues(boardId, body.mirrorIssues);
+  res.json(await listIntegrations(boardId));
+});
+
+app.patch("/board/:boardId/integration/:provider", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  const { provider } = parse(z.object({ provider: z.enum(["SLACK", "GITHUB"]) }), req.params, "URL parameters");
+  const body = parse(z.object({ enabled: z.boolean() }), req.body, "body");
+  await requireBoardAdmin(req, boardId);
+
+  await setEnabled(boardId, provider, body.enabled);
+  res.json(await listIntegrations(boardId));
+});
+
+app.delete("/board/:boardId/integration/:provider", requireAuth, async (req, res) => {
+  const { boardId } = parse(boardIdParam, req.params, "URL parameters");
+  const { provider } = parse(z.object({ provider: z.enum(["SLACK", "GITHUB"]) }), req.params, "URL parameters");
+  await requireBoardAdmin(req, boardId);
+
+  await disconnect(boardId, provider);
+  res.json(await listIntegrations(boardId));
+});
+
 // --- GitHub webhooks --------------------------------------------------------
 // GitHub POSTs here for every event the App subscribes to. The order is the
 // whole design: verify the signature over the raw bytes, drop redeliveries,
@@ -834,7 +1361,6 @@ app.post("/webhooks/github", async (req, res) => {
   const delivery = req.header("x-github-delivery") ?? "";
   const event = req.header("x-github-event") ?? "";
   const action = typeof req.body?.action === "string" ? req.body.action : "";
-  console.log(`[github] received ${event}${action ? "." + action : ""} delivery=${delivery || "(none)"}`);
 
   if (!GITHUB_WEBHOOK_SECRET) throw new HttpError(503, "GitHub webhook secret is not configured");
 
@@ -846,6 +1372,8 @@ app.post("/webhooks/github", async (req, res) => {
     );
     throw new HttpError(401, "Invalid webhook signature");
   }
+  // Only signed (therefore GitHub-authored) requests reach the log.
+  console.log(`[github] received ${event}${action ? "." + action : ""} delivery=${delivery || "(none)"}`);
 
   if (delivery && !recentDeliveries.add(delivery)) {
     console.log(`[github] duplicate delivery=${delivery} ignored`);
@@ -862,36 +1390,176 @@ app.post("/webhooks/github", async (req, res) => {
   }
 });
 
+/**
+ * Every event is scoped to the board its repository is bound to. A repository
+ * nobody linked is ignored — without that, a card key like ZEP-7 would be
+ * matched across every organization on the server.
+ */
 async function handleGitHubEvent(event: string, payload: unknown): Promise<void> {
   if (event === "ping") {
-    console.log("[github] ping received \u2014 webhook URL and secret are working");
+    console.log("[github] ping received — webhook URL and secret are working");
     return;
   }
-  if (event !== "pull_request") return;
+  if (event !== "pull_request" && event !== "issues") return;
 
-  const parsed = pullRequestEvent.safeParse(payload);
+  const repoName = (payload as { repository?: { full_name?: unknown } })?.repository?.full_name;
+  if (typeof repoName !== "string") return;
+  const link = await boardForRepo(repoName);
+  if (!link) {
+    console.log(`[github] ${repoName} is not linked to a board — ignored`);
+    return;
+  }
+  if (!link.enabled) {
+    console.log(`[github] ${repoName} is linked but paused — ignored`);
+    return;
+  }
+
+  if (event === "pull_request") {
+    const parsed = pullRequestEvent.safeParse(payload);
+    if (!parsed.success) {
+      console.warn("[github] pull_request payload missing expected fields:", parsed.error.issues);
+      return;
+    }
+    const move = planMoveForPullRequest(parsed.data);
+    if (!move) {
+      console.log(`[github] pull_request ${parsed.data.action} #${parsed.data.pull_request.number}: nothing to move`);
+      return;
+    }
+    await serializedByKey(`${link.boardId}:${move.key}`, () => moveCardOnBoard(link.boardId, move));
+    return;
+  }
+
+  const parsed = issuesEvent.safeParse(payload);
   if (!parsed.success) {
-    console.warn("[github] pull_request payload missing expected fields:", parsed.error.issues);
+    console.warn("[github] issues payload missing expected fields:", parsed.error.issues);
     return;
   }
-  const move = planMoveForPullRequest(parsed.data);
-  if (!move) {
-    console.log(`[github] pull_request ${parsed.data.action} #${parsed.data.pull_request.number}: nothing to move`);
+  const plan = planForIssue(parsed.data);
+  if (!plan) {
+    console.log(`[github] issues.${parsed.data.action} #${parsed.data.issue.number}: nothing to mirror`);
     return;
   }
-  await moveCardOnBoard(move);
+  await serializedByKey(`${link.boardId}:gh#${plan.number}`, () => applyIssuePlan(link.boardId, plan));
 }
 
-/** Asks the socket server \u2014 which owns the in-memory board today \u2014 to move a card. */
-async function moveCardOnBoard(move: CardMove): Promise<void> {
-  if (!WS_INTERNAL_TOKEN) throw new Error("WS_INTERNAL_TOKEN not set; cannot reach the socket server");
-  const response = await fetch(`${WS_INTERNAL_URL}/internal/issue-moved`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${WS_INTERNAL_TOKEN}` },
-    body: JSON.stringify(move),
+// Events for the same card run one after another, so "opened" then "merged"
+// arriving together cannot finish in the wrong order.
+const inFlightByKey = new Map<string, Promise<void>>();
+function serializedByKey(key: string, task: () => Promise<void>): Promise<void> {
+  const run = (inFlightByKey.get(key) ?? Promise.resolve()).then(task, task);
+  inFlightByKey.set(key, run);
+  return run.finally(() => {
+    if (inFlightByKey.get(key) === run) inFlightByKey.delete(key);
   });
-  if (!response.ok) throw new Error(`socket server answered ${response.status}: ${await response.text()}`);
-  console.log(`[github] ${move.key} → ${move.sectionId} (${move.reason})`);
+}
+
+/** Finds the card by key WITHIN the bound board and moves it to that column kind. */
+async function moveCardOnBoard(boardId: string, move: CardMove): Promise<void> {
+  const parsed = parseIssueKey(move.key);
+  if (!parsed) return;
+  const board = await prisma.board.findUnique({ where: { id: boardId }, select: { keyPrefix: true } });
+  if (board?.keyPrefix !== parsed.prefix) {
+    console.log(`[github] ${move.key}: not a key of the linked board (${board?.keyPrefix}) — ignored`);
+    return;
+  }
+  const match = await prisma.issue.findUnique({
+    where: { boardId_number: { boardId, number: parsed.number } },
+    select: { id: true },
+  });
+  if (!match) {
+    console.warn(`[github] ${move.key}: no such card on the linked board`);
+    return;
+  }
+  const target = await prisma.section.findFirst({ where: { boardId, kind: move.kind }, select: { id: true } });
+  if (!target) {
+    console.warn(`[github] ${move.key}: the board has no ${move.kind} column`);
+    return;
+  }
+  // No echoOfIssue: a merged pull request SHOULD close the card's linked issue.
+  await moveIssueTo(match.id, target.id, { enforceRules: false, reason: move.reason });
+  await recordGitHub(boardId, null);
+  console.log(`[github] ${move.key} → ${move.kind} (${move.reason})`);
+}
+
+/** Applies a GitHub issue event to the board's cards. Idempotent, so our own echoes are harmless. */
+async function applyIssuePlan(boardId: string, plan: IssuePlan): Promise<void> {
+  const existing = await prisma.issue.findUnique({
+    where: { boardId_githubNumber: { boardId, githubNumber: plan.number } },
+    select: { ...issueSelect, section: { select: { kind: true } } },
+  });
+
+  if (plan.type === "create") {
+    // Already linked? This is the echo of an issue THIS board created. The
+    // board is the source of truth for its own card, and the body we posted
+    // carries a tracking footer — writing it back would put that footer into
+    // the user's description. So: acknowledge and change nothing.
+    if (existing) return;
+    const backlog = await prisma.section.findFirst({ where: { boardId, kind: "BACKLOG" }, select: { id: true } });
+    if (!backlog) {
+      console.warn(`[github] issue #${plan.number}: the board has no Backlog column`);
+      return;
+    }
+    const card = await createCard({
+      boardId,
+      sectionId: backlog.id,
+      title: plan.title,
+      description: plan.body,
+      githubNumber: plan.number,
+    });
+    publish(boardId, { type: "issue_added", issue: card });
+    notifyBoard(
+      boardId,
+      `${card.key} · New card from GitHub issue #${plan.number} by ${escapeSlack(plan.author)}: ${boardLink(boardId, card.title)}`,
+    );
+    await recordGitHub(boardId, null);
+    console.log(`[github] issue #${plan.number} → new card ${card.key}`);
+    return;
+  }
+
+  if (!existing) {
+    console.log(`[github] issue #${plan.number}: no card mirrors it — ignored`);
+    return;
+  }
+
+  if (plan.type === "delete") {
+    await prisma.issue.delete({ where: { id: existing.id } });
+    publish(boardId, { type: "issue_deleted", issueId: existing.id });
+    await recordGitHub(boardId, null);
+    return;
+  }
+
+  if (plan.type === "edit") {
+    // Write only what GitHub reports as changed. Editing an issue's body must
+    // not revert a title someone renamed on the board.
+    const data: { title?: string; description?: string | null } = {};
+    if (plan.changedTitle) data.title = plan.title;
+    if (plan.changedBody) data.description = plan.body;
+    if (Object.keys(data).length === 0) return;
+
+    const updated = toIssueDto(
+      await prisma.issue.update({
+        where: { id: existing.id },
+        data: { ...data, version: { increment: 1 } },
+        select: issueSelect,
+      }),
+    );
+    publish(boardId, { type: "issue_updated", issue: updated });
+    await recordGitHub(boardId, null);
+    return;
+  }
+
+  // plan.type === "state": closed → Done, reopened → back to To Do.
+  if (existing.section.kind === plan.kind) return; // already there; nothing to say
+  // Reopening returns a card from Done. A card parked anywhere else — in
+  // progress, or in a custom column — is where someone deliberately put it.
+  if (plan.kind === "TODO" && existing.section.kind !== "DONE") return;
+  const target = await prisma.section.findFirst({ where: { boardId, kind: plan.kind }, select: { id: true } });
+  if (!target) {
+    console.warn(`[github] issue #${plan.number}: the board has no ${plan.kind} column`);
+    return;
+  }
+  await moveIssueTo(existing.id, target.id, { enforceRules: false, reason: plan.reason, echoOfIssue: plan.number });
+  await recordGitHub(boardId, null);
 }
 
 // ---------------------------------------------------------------------------
