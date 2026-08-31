@@ -5,10 +5,16 @@ WORKDIR /app
 
 # Manifests first: this layer is cached until a dependency actually changes.
 COPY package.json bun.lock ./
+# Every workspace in bun.lock, not just the ones this app imports: bun compares
+# the whole workspace set against the lockfile, and a missing member makes
+# --frozen-lockfile fail. Add a line here when a new workspace is added.
 COPY apps/backend/package.json ./apps/backend/
 COPY apps/frontend/package.json ./apps/frontend/
 COPY apps/websockets/package.json ./apps/websockets/
 COPY packages/db/package.json ./packages/db/
+COPY packages/eslint-config/package.json ./packages/eslint-config/
+COPY packages/typescript-config/package.json ./packages/typescript-config/
+COPY packages/ui/package.json ./packages/ui/
 RUN bun install --frozen-lockfile
 
 FROM deps AS build
