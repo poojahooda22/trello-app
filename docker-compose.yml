@@ -8,11 +8,13 @@ services:
       # Caddy to HTTPS, with the certificate handled automatically.
       SITE_ADDRESS: ${SITE_ADDRESS:-:80}
     ports:
+      # 80 is also how Caddy answers the ACME challenge, so it stays open even
+      # once the site is HTTPS. 443/udp is HTTP/3. Both are published
+      # unconditionally: with SITE_ADDRESS=:80 Caddy simply does not listen on
+      # 443, and switching to a domain then needs no change to this file.
       - "80:80"
-      # Uncomment once a real domain points here, so Caddy can serve and renew
-      # certificates. 443/udp is HTTP/3.
-      # - "443:443"
-      # - "443:443/udp"
+      - "443:443"
+      - "443:443/udp"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
