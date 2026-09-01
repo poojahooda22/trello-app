@@ -5,6 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="./logo.svg" />
     <title>Bun + React</title>
+    <!-- Runs before first paint so the theme is right on the first frame. The
+         perplexity app hardcodes dark here; Trello is a light-first product, so
+         with no saved choice this follows the operating system instead. -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("theme");
+          var dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+          if (dark) document.documentElement.classList.add("dark");
+        } catch (e) {
+          /* private mode: fall through to the light default */
+        }
+      })();
+    </script>
+
     <script type="module" src="./frontend.tsx" async></script>
   </head>
   <body>

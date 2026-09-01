@@ -187,3 +187,19 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+
+/* View Transitions — circular clip-path reveal for the theme toggle (ported
+   from perplexity-webapp, originally rare-lab). The default cross-fade is
+   disabled and the new snapshot stacked on top; the toggle's JS animates that
+   layer's clip-path from a 0px circle out to the whole viewport. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+::view-transition-old(root) {
+  z-index: 1;
+}
+::view-transition-new(root) {
+  z-index: 9999;
+}

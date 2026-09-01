@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { LogOut, Search, Settings, User } from "lucide-react";
 
 import { TrelloMark } from "@/components/app/trello-mark";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { UserAvatar } from "@/components/app/user-avatar";
 import {
   DropdownMenu,
@@ -38,6 +39,8 @@ export function AppNavbar() {
         <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2" />
         <Input type="search" placeholder="Search" aria-label="Search" className="bg-surface-sunken focus-visible:bg-surface h-9 rounded-md pl-8 text-sm" />
       </div>
+
+      <ThemeToggle />
 
       <DropdownMenu>
         <DropdownMenuTrigger
