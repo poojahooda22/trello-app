@@ -78,21 +78,11 @@ function BoardsPage() {
 
         <main className="flex-1 px-10 py-8">
           <div className="mx-auto max-w-5xl">
-            <div className="flex items-center justify-between pb-4">
-              <h1 className="text-text-subtlest text-xs font-bold tracking-wider uppercase">
-                {orgFilter && visible[0] ? visible[0].name : "Your workspaces"}
-              </h1>
-              {orgFilter && (
-                <Link
-                  to="/boards"
-                  search={{}}
-                  className="text-text-subtle hover:text-text-strong text-xs font-medium underline"
-                >
-                  Show all workspaces
-                </Link>
-              )}
-            </div>
+            <h1 className="text-text-subtlest pb-4 text-xs font-bold tracking-wider uppercase">
+              {orgFilter && visible[0] ? visible[0].name : "Your workspaces"}
+            </h1>
 
+            {!orgFilter && (
             <form onSubmit={handleCreate} className="flex max-w-md gap-2 pb-8">
               <Input
                 value={name}
@@ -108,8 +98,11 @@ function BoardsPage() {
                 {create.isPending ? "Creating…" : "Create workspace"}
               </Button>
             </form>
+            )}
 
-            {create.isError && <p className="text-destructive pb-4 text-sm">{create.error.message}</p>}
+            {!orgFilter && create.isError && (
+              <p className="text-destructive pb-4 text-sm">{create.error.message}</p>
+            )}
 
             {isPending && <p className="text-text-subtlest text-sm">Loading…</p>}
 
@@ -124,10 +117,7 @@ function BoardsPage() {
 
             {filterMissing && (
               <p className="text-text-subtlest text-sm">
-                That workspace no longer exists.{" "}
-                <Link to="/boards" search={{}} className="underline">
-                  Show all workspaces
-                </Link>
+                That workspace no longer exists.
               </p>
             )}
 

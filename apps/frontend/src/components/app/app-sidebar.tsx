@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { Link, useRouterState } from "@tanstack/react-router";
 import { Columns3, House, LayoutTemplate } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -9,29 +9,36 @@ import { getOrganizations } from "@/lib/api";
 const itemClass =
   "flex items-center gap-3 rounded-sm px-3 py-2 text-sm font-medium text-text-subtle transition-colors hover:bg-surface-subtle";
 
-const activeClass = "bg-brand-subtle text-brand hover:bg-brand-subtle";
+// Neutral, not brand blue: the palette is a grey ladder now, and a blue pill
+// was the last Atlassian tint left in the chrome. One rung lighter than the
+// hover colour, so selected and hovered stay distinguishable.
+const activeClass = "bg-surface-hover text-text-strong font-semibold hover:bg-surface-hover";
 
 export function AppSidebar() {
   // Same query key as the navbar — React Query serves both from one fetch.
   const { data: organizations } = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations, retry: false });
 
+  // Selection is computed in one place rather than left to per-Link matching.
+  // Home and Boards lead to the same route, so matchers alone lit both at once;
+  // deriving all three from the same location makes "exactly one" enforceable.
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const searchStr = useRouterState({ select: (s) => s.location.searchStr });
+  const activeOrg = new URLSearchParams(searchStr).get("org");
+
+  const onOverview = pathname === "/boards" && activeOrg === null;
+  const onBoardDetail = pathname.startsWith("/boards/");
+
   return (
     <aside className="border-border-subtle w-56 shrink-0 border-r bg-surface px-3 py-4">
       <nav className="flex flex-col gap-0.5">
-        {/* "/" only redirects now, so Home points at the overview it describes.
-            exact + includeSearch keeps it unlit while a workspace filter is on. */}
-        <Link
-          to="/boards"
-          search={{}}
-          className={itemClass}
-          activeProps={{ className: activeClass }}
-          activeOptions={{ exact: true, includeSearch: true }}
-        >
+        {/* Home is the unfiltered overview of every workspace. */}
+        <Link to="/boards" search={{}} className={cn(itemClass, onOverview && activeClass)}>
           <House className="size-4 shrink-0" />
           Home
         </Link>
-        {/* Stays lit on a board's own page too, which Home should not be. */}
-        <Link to="/boards" className={itemClass} activeProps={{ className: activeClass }}>
+        {/* Boards means "you are inside a board", so it lights only there. The
+            two would otherwise both match /boards and light together. */}
+        <Link to="/boards" className={cn(itemClass, onBoardDetail && activeClass)}>
           <Columns3 className="size-4 shrink-0" />
           Boards
         </Link>
@@ -57,9 +64,7 @@ export function AppSidebar() {
               <Link
                 to="/boards"
                 search={{ org: org.id }}
-                className={cn(itemClass, "text-text-strong")}
-                activeProps={{ className: activeClass }}
-                activeOptions={{ exact: true, includeSearch: true }}
+                className={cn(itemClass, "text-text-strong", activeOrg === org.id && activeClass)}
               >
                 <WorkspaceAvatar name={org.name} />
                 <span className="truncate">{org.name}</span>
