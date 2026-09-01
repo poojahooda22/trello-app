@@ -7,6 +7,18 @@
         "graphify.serve",
         "E:\\Development\\Portfolio-phase2\\trello-app\\graphify-out\\graph.json"
       ]
+    },
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@1.8.0",
+        "--no-usage-statistics",
+        "--no-performance-crux",
+        "--viewport=1440x900",
+        "--screenshotFormat=jpeg",
+        "--screenshotMaxWidth=1280"
+      ]
     }
   }
 }
