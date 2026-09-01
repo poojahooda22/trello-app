@@ -13,10 +13,10 @@ export const DEFAULT_SECTIONS: { kind: SectionKind; title: string }[] = [
 
 /** Where a card may be dragged, keyed by the kind it comes from. Mirrored in apps/frontend/src/lib/board.ts. */
 export const ALLOWED: Record<SectionKind, readonly SectionKind[]> = {
-  BACKLOG: ["TODO"],
-  TODO: ["BACKLOG", "INPROGRESS"],
-  INPROGRESS: ["REVIEW"],
-  REVIEW: ["INPROGRESS", "DONE"],
+  BACKLOG: ["TODO", "INPROGRESS", "REVIEW", "DONE"],
+  TODO: ["BACKLOG", "INPROGRESS", "REVIEW", "DONE"],
+  INPROGRESS: ["REVIEW", "BACKLOG", "DONE", "TODO"],
+  REVIEW: ["INPROGRESS", "DONE",  "BACKLOG", "TODO"],
   DONE: [],
 };
 

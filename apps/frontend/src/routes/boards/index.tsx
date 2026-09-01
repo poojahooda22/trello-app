@@ -12,6 +12,11 @@ import { cn } from "@/lib/utils";
 import { createBoard, createOrganization, getBoards, getOrganizations, type Organization } from "@/lib/api";
 
 export const Route = createFileRoute("/boards/")({
+  // ?org=<id> scopes the page to one workspace. It lives in the URL rather than
+  // in state so the view is linkable and survives a reload.
+  validateSearch: (search: Record<string, unknown>): { org?: string } => ({
+    org: typeof search.org === "string" && search.org.length > 0 ? search.org : undefined,
+  }),
   component: BoardsPage,
 });
 
@@ -33,6 +38,7 @@ function gradientFor(id: string) {
 
 function BoardsPage() {
   const queryClient = useQueryClient();
+  const { org: orgFilter } = Route.useSearch();
 
   const {
     data: organizations,
@@ -52,6 +58,11 @@ function BoardsPage() {
 
   const [name, setName] = useState("");
 
+  const visible = orgFilter ? (organizations ?? []).filter((o) => o.id === orgFilter) : (organizations ?? []);
+  // A filter naming a workspace that is gone would otherwise render an empty
+  // page with no explanation.
+  const filterMissing = Boolean(orgFilter) && organizations !== undefined && visible.length === 0;
+
   function handleCreate(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!name.trim()) return;
@@ -67,7 +78,20 @@ function BoardsPage() {
 
         <main className="flex-1 px-10 py-8">
           <div className="mx-auto max-w-5xl">
-            <h1 className="text-text-subtlest pb-4 text-xs font-bold tracking-wider uppercase">Your workspaces</h1>
+            <div className="flex items-center justify-between pb-4">
+              <h1 className="text-text-subtlest text-xs font-bold tracking-wider uppercase">
+                {orgFilter && visible[0] ? visible[0].name : "Your workspaces"}
+              </h1>
+              {orgFilter && (
+                <Link
+                  to="/boards"
+                  search={{}}
+                  className="text-text-subtle hover:text-text-strong text-xs font-medium underline"
+                >
+                  Show all workspaces
+                </Link>
+              )}
+            </div>
 
             <form onSubmit={handleCreate} className="flex max-w-md gap-2 pb-8">
               <Input
@@ -98,10 +122,20 @@ function BoardsPage() {
               </p>
             )}
 
+            {filterMissing && (
+              <p className="text-text-subtlest text-sm">
+                That workspace no longer exists.{" "}
+                <Link to="/boards" search={{}} className="underline">
+                  Show all workspaces
+                </Link>
+              </p>
+            )}
+
             {organizations &&
-              (organizations.length ? (
+              !filterMissing &&
+              (visible.length ? (
                 <div className="flex flex-col gap-10">
-                  {organizations.map((org) => (
+                  {visible.map((org) => (
                     <Workspace key={org.id} org={org} />
                   ))}
                 </div>

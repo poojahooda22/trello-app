@@ -18,10 +18,19 @@ export function AppSidebar() {
   return (
     <aside className="border-border-subtle w-56 shrink-0 border-r bg-surface px-3 py-4">
       <nav className="flex flex-col gap-0.5">
-        <Link to="/" className={itemClass} activeProps={{ className: activeClass }}>
+        {/* "/" only redirects now, so Home points at the overview it describes.
+            exact + includeSearch keeps it unlit while a workspace filter is on. */}
+        <Link
+          to="/boards"
+          search={{}}
+          className={itemClass}
+          activeProps={{ className: activeClass }}
+          activeOptions={{ exact: true, includeSearch: true }}
+        >
           <House className="size-4 shrink-0" />
           Home
         </Link>
+        {/* Stays lit on a board's own page too, which Home should not be. */}
         <Link to="/boards" className={itemClass} activeProps={{ className: activeClass }}>
           <Columns3 className="size-4 shrink-0" />
           Boards
@@ -45,10 +54,16 @@ export function AppSidebar() {
         <ul className="flex flex-col gap-0.5">
           {organizations.map((org) => (
             <li key={org.id}>
-              <span className={cn(itemClass, "text-text-strong")}>
+              <Link
+                to="/boards"
+                search={{ org: org.id }}
+                className={cn(itemClass, "text-text-strong")}
+                activeProps={{ className: activeClass }}
+                activeOptions={{ exact: true, includeSearch: true }}
+              >
                 <WorkspaceAvatar name={org.name} />
                 <span className="truncate">{org.name}</span>
-              </span>
+              </Link>
             </li>
           ))}
         </ul>

@@ -44,11 +44,18 @@ describe("board-rules", () => {
     expect(parseIssueKey("ZEP-")).toBeNull();
     expect(parseIssueKey(undefined)).toBeNull();
   });
-  test("canMove follows the table, allows reorder, and frees custom columns", () => {
+  // The table was deliberately loosened: a card may go anywhere except back out
+  // of DONE, which stays one-way. This mirrors apps/frontend/src/lib/board.ts —
+  // the two must agree or the client places a card the server then rejects.
+  test("canMove allows any transition except out of DONE, and frees custom columns", () => {
     expect(canMove("TODO", "INPROGRESS")).toBe(true);
-    expect(canMove("TODO", "DONE")).toBe(false);
+    expect(canMove("TODO", "DONE")).toBe(true);
+    expect(canMove("BACKLOG", "REVIEW")).toBe(true);
+    expect(canMove("REVIEW", "BACKLOG")).toBe(true);
     expect(canMove("DONE", "TODO")).toBe(false);
+    expect(canMove("DONE", "REVIEW")).toBe(false);
     expect(canMove("REVIEW", "REVIEW")).toBe(true);
+    expect(canMove("DONE", "DONE")).toBe(true);
     expect(canMove(null, "DONE")).toBe(true);
     expect(canMove("DONE", null)).toBe(true);
   });
