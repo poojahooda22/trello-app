@@ -126,24 +126,43 @@
   --success-text: #216e4e;
 }
 
+/* Dark theme.
+ *
+ * Surfaces, text and borders come from the perplexity-webapp palette: a true
+ * neutral ladder from near-black to near-white. Atlassian's blue-grey darks
+ * (#1d2125 / #22272b) were tinted, which fought with the accents sitting on
+ * top of them.
+ *
+ * Atlassian is kept for everything that is *meant* to carry colour — the brand
+ * blue on buttons and chips, the success green, the chart series, and the
+ * selected item in the sidebar. Neutral ground, coloured signal.
+ *
+ * Light mode is untouched.
+ */
 .dark {
-  --background: #1d2125;
-  --foreground: #b6c2cf;
-  --card: #22272b;
-  --card-foreground: #b6c2cf;
-  --popover: #282e33;
-  --popover-foreground: #b6c2cf;
+  /* The neutral ladder: #131314 → #1d1d1f → #2b2b2e → #3e3f42 →
+     #88898e → #a5a5a8 → #f2f3f5 */
+  --background: #131314;
+  --foreground: #f2f3f5;
+  --card: #1d1d1f;
+  --card-foreground: #f2f3f5;
+  --popover: #1d1d1f;
+  --popover-foreground: #f2f3f5;
+  --secondary: #2b2b2e;
+  --secondary-foreground: #f2f3f5;
+  --muted: #1d1d1f;
+  --muted-foreground: #a5a5a8;
+  /* Generic hover surfaces stay neutral; the sidebar's selected state below
+     keeps its blue tint, because there it is a signal rather than a hover. */
+  --accent: #2b2b2e;
+  --accent-foreground: #f2f3f5;
+  --border: #2b2b2e;
+  --input: #3e3f42;
+
+  /* Kept from Atlassian: the things that should carry colour. */
   --primary: #579dff;
-  --primary-foreground: #1d2125;
-  --secondary: #2c333a;
-  --secondary-foreground: #b6c2cf;
-  --muted: #2c333a;
-  --muted-foreground: #8c9bab;
-  --accent: #1c2b41;
-  --accent-foreground: #579dff;
+  --primary-foreground: #131314;
   --destructive: #f87168;
-  --border: #313b45;
-  --input: #313b45;
   --ring: #388bff;
 
   --chart-1: #579dff;
@@ -152,27 +171,30 @@
   --chart-4: #9f8fef;
   --chart-5: #f87168;
 
-  --sidebar: #1d2125;
-  --sidebar-foreground: #b6c2cf;
+  --sidebar: #131314;
+  --sidebar-foreground: #a5a5a8;
   --sidebar-primary: #579dff;
-  --sidebar-primary-foreground: #1d2125;
+  --sidebar-primary-foreground: #131314;
   --sidebar-accent: #1c2b41;
   --sidebar-accent-foreground: #579dff;
-  --sidebar-border: #313b45;
+  --sidebar-border: #2b2b2e;
   --sidebar-ring: #388bff;
 
   --brand: #579dff;
   --brand-hover: #85b8ff;
   --brand-pressed: #cce0ff;
   --brand-subtle: #1c2b41;
-  --surface: #22272b;
-  --surface-sunken: #1d2125;
-  --surface-subtle: #2c333a;
-  --surface-hover: #323940;
-  --text-strong: #b6c2cf;
-  --text-subtle: #9fadbc;
-  --text-subtlest: #8c9bab;
-  --border-subtle: #313b45;
+  --surface: #1d1d1f;
+  --surface-sunken: #131314;
+  --surface-subtle: #2b2b2e;
+  --surface-hover: #3e3f42;
+  --text-strong: #f2f3f5;
+  --text-subtle: #a5a5a8;
+  /* One step lighter than perplexity's #7f8085, which measured 4.27:1 here
+     and missed WCAG AA for small text. This is 4.82:1 and still reads as a
+     rung below --text-subtle. */
+  --text-subtlest: #88898e;
+  --border-subtle: #2b2b2e;
   --success: #7ee2b8;
   --success-subtle: #1c3329;
   --success-text: #7ee2b8;
