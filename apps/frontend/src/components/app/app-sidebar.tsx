@@ -18,6 +18,10 @@ export function AppSidebar() {
   return (
     <aside className="border-border-subtle w-56 shrink-0 border-r bg-surface px-3 py-4">
       <nav className="flex flex-col gap-0.5">
+        <Link to="/" className={itemClass} activeProps={{ className: activeClass }}>
+          <House className="size-4 shrink-0" />
+          Home
+        </Link>
         <Link to="/boards" className={itemClass} activeProps={{ className: activeClass }}>
           <Columns3 className="size-4 shrink-0" />
           Boards
@@ -31,11 +35,6 @@ export function AppSidebar() {
           <LayoutTemplate className="size-4 shrink-0" />
           Templates
         </span>
-
-        <Link to="/" className={itemClass} activeProps={{ className: activeClass }}>
-          <House className="size-4 shrink-0" />
-          Home
-        </Link>
       </nav>
 
       <div className="border-border-subtle my-4 border-t" />

@@ -4,10 +4,10 @@ export const SECTION_KINDS = ["BACKLOG", "TODO", "INPROGRESS", "REVIEW", "DONE"]
 
 /** Where a card may be dragged, keyed by the kind it comes from. The backend enforces the same table. */
 export const ALLOWED: Record<SectionKind, readonly SectionKind[]> = {
-  BACKLOG: ["TODO"],
-  TODO: ["BACKLOG", "INPROGRESS"],
-  INPROGRESS: ["REVIEW"],
-  REVIEW: ["INPROGRESS", "DONE"],
+  BACKLOG: ["TODO", "INPROGRESS", "REVIEW", "DONE"],
+  TODO: ["BACKLOG", "INPROGRESS", "REVIEW", "DONE"],
+  INPROGRESS: ["REVIEW", "BACKLOG", "DONE", "TODO"],
+  REVIEW: ["INPROGRESS", "DONE",  "BACKLOG", "TODO"],
   DONE: [],
 };
 

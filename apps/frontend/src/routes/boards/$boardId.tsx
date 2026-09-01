@@ -245,10 +245,21 @@ function BoardDetail() {
                 <h1
                   onDoubleClick={() => setDraft(board?.title ?? "")}
                   title="Double-click to rename"
-                  className="group text-text-strong flex cursor-text items-center gap-1.5 text-lg font-semibold"
+                  className="group text-text-strong flex cursor-pointer items-center gap-1.5 text-lg font-semibold"
                 >
                   <span className="truncate">{board?.title ?? "Board " + boardId.slice(0, 8)}</span>
-                  <Pencil className="text-text-subtlest size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+                  {/* Double-click is not discoverable on its own, so the pencil is
+                      a real button: one click does the same thing. It stays
+                      keyboard reachable even while it is visually hidden. */}
+                  <button
+                    type="button"
+                    onClick={() => setDraft(board?.title ?? "")}
+                    aria-label="Rename board"
+                    title="Rename board"
+                    className="text-text-subtlest hover:text-text-strong hover:bg-surface-hover focus-visible:ring-ring/50 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded outline-none transition-opacity focus-visible:opacity-100 focus-visible:ring-[3px] md:opacity-0 md:group-hover:opacity-100"
+                  >
+                    <Pencil className="size-3.5" />
+                  </button>
                 </h1>
               ) : (
                 <Input
