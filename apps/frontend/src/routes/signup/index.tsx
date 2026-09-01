@@ -49,10 +49,6 @@ function Signup() {
         alt=""
         className="pointer-events-none absolute right-0 bottom-0 hidden w-80 select-none mix-blend-multiply xl:block"
       />
-      {/* Freepik's free license requires attribution; the baked watermarks were cropped. */}
-      <p className="absolute bottom-2 left-1/2 hidden -translate-x-1/2 text-[11px] text-muted-foreground/70 xl:block">
-        Illustrations by Freepik
-      </p>
 
       <Card className="z-10 w-full max-w-100 rounded-lg border-0 py-10 shadow-[0_2px_10px_rgba(9,30,66,0.08)]">
         <CardContent className="flex flex-col gap-6 px-10">
