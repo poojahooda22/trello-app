@@ -1,13 +1,16 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { DragDropProvider } from "@dnd-kit/react";
-import { GitPullRequest, Hash, Plus, Settings, X } from "lucide-react";
+import { Pencil, Plus, Settings, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { AppNavbar } from "@/components/app/app-navbar";
 import { AppSidebar } from "@/components/app/app-sidebar";
 import { BoardColumn } from "@/components/app/board-column";
+import { GitHubLogo, SlackLogo } from "@/components/app/brand-icons";
+import { InviteDialog } from "@/components/app/invite-dialog";
 import { IssueCard } from "@/components/app/issue-card";
+import { UserAvatar } from "@/components/app/user-avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,6 +20,8 @@ import {
   getOrganizations,
   getSections,
   moveIssue,
+  updateBoard,
+  type Board,
   type BoardData,
   type Issue,
   type Section,
@@ -85,6 +90,31 @@ function BoardDetail() {
     mutationFn: moveIssue,
     onSuccess: (issue) => patchIssue(issue),
   });
+
+  // Double-clicking the board name turns it into an input. `draft` being null
+  // is what "not editing" means, so there is one source of truth for the mode.
+  const [draft, setDraft] = useState<string | null>(null);
+
+  const rename = useMutation({
+    mutationFn: (title: string) => updateBoard(boardId, { title }),
+    onSuccess: (updated) => {
+      // The title is read out of the per-organization board lists, so patch the
+      // one this board belongs to rather than refetching every workspace.
+      queryClient.setQueryData<Board[]>(["boards", updated.organizationId], (prev) =>
+        prev?.map((b) => (b.id === updated.id ? { ...b, title: updated.title } : b)),
+      );
+      setDraft(null);
+    },
+  });
+
+  function commitRename() {
+    const next = draft?.trim();
+    if (!next || next === board?.title) {
+      setDraft(null);
+      return;
+    }
+    rename.mutate(next);
+  }
 
   function handleDrop(issue: Issue, toSectionId: string) {
     void playDropSound();
@@ -210,11 +240,41 @@ function BoardDetail() {
 
         <main className="flex min-w-0 flex-1 flex-col">
           <header className="border-border-subtle bg-surface flex shrink-0 items-center gap-3 border-b px-6 py-3">
-            <div className="min-w-0">
-              <h1 className="text-text-strong truncate text-lg font-semibold">
-                {board?.title ?? "Board " + boardId.slice(0, 8)}
-              </h1>
-              {workspace && <p className="text-text-subtlest truncate text-xs">{workspace.name}</p>}
+            <div className="flex min-w-0 flex-col gap-1">
+              {draft === null ? (
+                <h1
+                  onDoubleClick={() => setDraft(board?.title ?? "")}
+                  title="Double-click to rename"
+                  className="group text-text-strong flex cursor-text items-center gap-1.5 text-lg font-semibold"
+                >
+                  <span className="truncate">{board?.title ?? "Board " + boardId.slice(0, 8)}</span>
+                  <Pencil className="text-text-subtlest size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+                </h1>
+              ) : (
+                <Input
+                  autoFocus
+                  aria-label="Board name"
+                  value={draft}
+                  disabled={rename.isPending}
+                  onChange={(e) => setDraft(e.target.value)}
+                  // Blur commits as well as Enter, so clicking away is not a
+                  // silent loss of what was typed.
+                  onBlur={commitRename}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename();
+                    if (e.key === "Escape") setDraft(null);
+                  }}
+                  className="h-8 w-64 text-lg font-semibold"
+                />
+              )}
+
+              {/* The workspace is a company name as often as not, so it reads as
+                  a tag rather than a subtitle. */}
+              {workspace && (
+                <span className="bg-brand-subtle text-brand w-fit max-w-56 truncate rounded px-1.5 py-0.5 text-[11px] font-semibold tracking-wide uppercase">
+                  {workspace.name}
+                </span>
+              )}
             </div>
 
             <div className="ml-auto flex items-center gap-2">
@@ -231,13 +291,14 @@ function BoardDetail() {
                   className={cn(
                     "flex items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium transition-colors",
                     i.lastError
-                      ? "bg-destructive/10 text-destructive"
+                      ? "bg-destructive/10 text-destructive hover:bg-destructive/15"
                       : i.enabled
-                        ? "bg-surface-subtle text-text-subtle hover:bg-surface-hover"
+                        // Green is the whole signal here: connected and working.
+                        ? "bg-success-subtle text-success-text hover:brightness-95"
                         : "bg-surface-subtle text-text-subtlest hover:bg-surface-hover",
                   )}
                 >
-                  {i.provider === "SLACK" ? <Hash className="size-3.5" /> : <GitPullRequest className="size-3.5" />}
+                  {i.provider === "SLACK" ? <SlackLogo className="size-3.5" /> : <GitHubLogo className="size-3.5" />}
                   <span className="max-w-28 truncate">{i.label ?? (i.provider === "SLACK" ? "Slack" : "GitHub")}</span>
                 </Link>
               ))}
@@ -260,16 +321,11 @@ function BoardDetail() {
                 <Settings className="size-4" />
               </Link>
 
-              <div className="flex -space-x-1.5">
+              <div className="flex items-center -space-x-1.5">
                 {users.slice(0, 5).map((u) => (
-                  <span
-                    key={u.id}
-                    title={u.email}
-                    className="border-surface bg-brand flex size-7 items-center justify-center rounded-full border-2 text-[10px] font-bold text-white"
-                  >
-                    {u.email.slice(0, 2).toUpperCase()}
-                  </span>
+                  <UserAvatar key={u.id} email={u.email} px={28} className="border-surface border-2" />
                 ))}
+                {workspace && <InviteDialog orgId={workspace.id} orgName={workspace.name} />}
               </div>
               <span className="text-text-subtlest text-xs">
                 {users.length === 0 ? "Only you" : users.length + " other" + (users.length === 1 ? "" : "s") + " here"}
@@ -279,8 +335,10 @@ function BoardDetail() {
 
           {isPending && <p className="text-text-subtlest p-4 text-sm">Loading board…</p>}
           {isError && <p className="text-destructive p-4 text-sm">{error.message}</p>}
-          {(create.isError || move.isError) && (
-            <p className="text-destructive px-4 pt-3 text-sm">{(create.error ?? move.error)?.message}</p>
+          {(create.isError || move.isError || rename.isError) && (
+            <p className="text-destructive px-4 pt-3 text-sm">
+              {(create.error ?? move.error ?? rename.error)?.message}
+            </p>
           )}
 
           <DragDropProvider

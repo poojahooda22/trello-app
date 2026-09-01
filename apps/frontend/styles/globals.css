@@ -51,6 +51,9 @@
   --color-text-subtle: var(--text-subtle);
   --color-text-subtlest: var(--text-subtlest);
   --color-border-subtle: var(--border-subtle);
+  --color-success: var(--success);
+  --color-success-subtle: var(--success-subtle);
+  --color-success-text: var(--success-text);
 
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -118,6 +121,9 @@
   --text-subtle: #44546f;
   --text-subtlest: #626f86;
   --border-subtle: #dfe1e6;
+  --success: #22a06b;
+  --success-subtle: #dcfff1;
+  --success-text: #216e4e;
 }
 
 .dark {
@@ -167,6 +173,9 @@
   --text-subtle: #9fadbc;
   --text-subtlest: #8c9bab;
   --border-subtle: #313b45;
+  --success: #7ee2b8;
+  --success-subtle: #1c3329;
+  --success-text: #7ee2b8;
 }
 
 @layer base {

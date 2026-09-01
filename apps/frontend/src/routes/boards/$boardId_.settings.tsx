@@ -1,9 +1,10 @@
 /** src/routes/boards/$boardId_.settings.tsx -> "/boards/$boardId/settings" (its own page, not nested in the board) */
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { ArrowLeft, Check, GitPullRequest, Hash, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Check, TriangleAlert } from "lucide-react";
 import { useState } from "react";
 
+import { GitHubLogo, SlackLogo } from "@/components/app/brand-icons";
 import { AppNavbar } from "@/components/app/app-navbar";
 import { AppSidebar } from "@/components/app/app-sidebar";
 import { Button } from "@/components/ui/button";
@@ -138,7 +139,10 @@ function CardShell({
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 text-[10px] font-bold tracking-wide uppercase",
-                connected && !failing && "bg-brand-subtle text-brand",
+                // Green only when it is genuinely working. Paused stays neutral
+                // so "connected but not sending" cannot read as success.
+                connected && !failing && status?.enabled && "bg-success-subtle text-success-text",
+                connected && !failing && !status?.enabled && "bg-surface-subtle text-text-subtle",
                 connected && failing && "bg-destructive/10 text-destructive",
                 !connected && "bg-surface-subtle text-text-subtlest",
               )}
@@ -214,7 +218,7 @@ function SlackCard({
 
   return (
     <CardShell
-      icon={<Hash className="size-5" />}
+      icon={<SlackLogo className="size-5" />}
       title="Slack"
       description="Post a message to a channel when a card is created or moved on this board."
       status={status}
@@ -396,7 +400,7 @@ function GitHubCard({
 
   return (
     <CardShell
-      icon={<GitPullRequest className="size-5" />}
+      icon={<GitHubLogo className="size-5" />}
       title="GitHub"
       description="Issues opened in the repository become cards; opening a pull request moves its card to Review, and merging moves it to Done."
       status={status}

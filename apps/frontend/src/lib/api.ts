@@ -127,6 +127,53 @@ export async function getBoards(orgId: string): Promise<Board[]> {
   return res.json();
 }
 
+/** Renames a board. The backend route is a PUT and replaces the title only. */
+export async function updateBoard(boardId: string, input: { title: string }): Promise<Board> {
+  const res = await fetch(`${API_URL}/board/${boardId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", ...bearer() },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? `Request failed with status ${res.status}`);
+  }
+  return res.json();
+}
+
+export type InviteResult = {
+  id: string;
+  email: string;
+  role: "ADMIN" | "MEMBER";
+  expiresAt: string;
+  emailed: boolean;
+  emailError?: string;
+  /** Only present when the mail did not go out, so the invite is still usable. */
+  link?: string;
+};
+
+/**
+ * Invites someone to the workspace an org owns. Membership is organization
+ * scoped, so this grants access to every board in it, not to one board.
+ * Requires the caller to be an admin of that organization.
+ */
+export async function inviteMember(input: {
+  orgId: string;
+  email: string;
+  role?: "ADMIN" | "MEMBER";
+}): Promise<InviteResult> {
+  const res = await fetch(`${API_URL}/invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...bearer() },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? `Request failed with status ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function createBoard(input: { orgId: string; title: string }): Promise<Board> {
   const res = await fetch(`${API_URL}/boards`, {
     method: "POST",

@@ -3,6 +3,7 @@ import { Link, useNavigate } from "@tanstack/react-router";
 import { LogOut, Search, Settings, User } from "lucide-react";
 
 import { TrelloMark } from "@/components/app/trello-mark";
+import { UserAvatar } from "@/components/app/user-avatar";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,8 +26,6 @@ export function AppNavbar() {
     navigate({ to: "/signin" });
   }
 
-  const initials = user?.email?.slice(0, 2).toUpperCase();
-
   return (
     <header className="border-border-subtle bg-surface sticky top-0 z-40 flex h-14 shrink-0 items-center gap-4 border-b px-4">
       <Link to="/boards" className="flex shrink-0 items-center gap-1.5">
@@ -43,9 +42,16 @@ export function AppNavbar() {
       <DropdownMenu>
         <DropdownMenuTrigger
           aria-label="Account menu"
-          className="focus-visible:ring-ring/50 bg-brand hover:bg-brand-hover flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white outline-none transition-colors focus-visible:ring-[3px]"
+          className="focus-visible:ring-ring/50 flex size-8 shrink-0 items-center justify-center rounded-full outline-none focus-visible:ring-[3px]"
         >
-          {initials ?? <User className="size-4" />}
+          {user?.email ? (
+            <UserAvatar email={user.email} px={32} title="Account menu" />
+          ) : (
+            // Before /me resolves there is no email to derive anything from.
+            <span className="bg-surface-subtle text-text-subtlest flex size-8 items-center justify-center rounded-full">
+              <User className="size-4" />
+            </span>
+          )}
         </DropdownMenuTrigger>
 
         <DropdownMenuContent align="end" className="w-60">
