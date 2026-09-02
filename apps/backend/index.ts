@@ -1503,14 +1503,18 @@ async function applyIssuePlan(boardId: string, plan: IssuePlan): Promise<void> {
     // carries a tracking footer — writing it back would put that footer into
     // the user's description. So: acknowledge and change nothing.
     if (existing) return;
-    const backlog = await prisma.section.findFirst({ where: { boardId, kind: "BACKLOG" }, select: { id: true } });
-    if (!backlog) {
-      console.warn(`[github] issue #${plan.number}: the board has no Backlog column`);
+    // A fresh issue is actionable work, so it lands in To Do; Backlog is the
+    // fallback for boards where that column has been deleted.
+    const target =
+      (await prisma.section.findFirst({ where: { boardId, kind: "TODO" }, select: { id: true } })) ??
+      (await prisma.section.findFirst({ where: { boardId, kind: "BACKLOG" }, select: { id: true } }));
+    if (!target) {
+      console.warn(`[github] issue #${plan.number}: the board has no To Do or Backlog column`);
       return;
     }
     const card = await createCard({
       boardId,
-      sectionId: backlog.id,
+      sectionId: target.id,
       title: plan.title,
       description: plan.body,
       githubNumber: plan.number,
