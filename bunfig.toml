@@ -1,0 +1,9 @@
+[test]
+# Bun's test runner globs *.spec.ts as well as *.test.ts, so without this it
+# picks up the Playwright suite under e2e/ and fails on the first test() call:
+# those files expect Playwright's runner, not Bun's. `bun test` is the unit
+# runner here and CI calls it bare, so the exclusion belongs in config rather
+# than in the CI command, where a local run would still hit it.
+pathIgnorePatterns = ["**/e2e/**"]
+# Environment every unit test file can rely on, set before the first import.
+preload = ["./apps/backend/test-env.ts"]

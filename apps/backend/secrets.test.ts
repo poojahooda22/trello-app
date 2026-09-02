@@ -1,5 +1,10 @@
-/** Unit tests for the at-rest encryption of integration credentials. */
-process.env.INTEGRATION_KEY = "0".repeat(63) + "1";
+/**
+ * Unit tests for the at-rest encryption of integration credentials.
+ *
+ * INTEGRATION_KEY is set by apps/backend/test-env.ts (the bunfig preload), not
+ * here: the module reads it once at load, and another test file may load it
+ * first.
+ */
 
 import { describe, expect, test } from "bun:test";
 const { encryptSecret, decryptSecret, encryptionAvailable } = await import(
