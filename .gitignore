@@ -41,3 +41,9 @@ yarn-error.log*
 graphify-out/
 .claude/.cache/
 .claude/settings.local.json
+
+# Playwright (results, HTML report, and the browser downloads it caches)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

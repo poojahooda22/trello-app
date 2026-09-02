@@ -215,7 +215,8 @@ async function request<T>(path: string, init: { method?: string; body?: string }
     const message = body?.error ?? `Request failed with status ${res.status}`;
     throw new Error(detail ? `${message}: ${detail}` : message);
   }
-  return res.json();
+  // 204 carries no body; reading one would throw on a request that succeeded.
+  return res.status === 204 ? (undefined as T) : res.json();
 }
 
 /** The whole board in one round trip, plus the tab's room token for the socket relay. */
@@ -298,10 +299,17 @@ export const updateIssue = (
   input: { title?: string; description?: string | null; priority?: Priority | null },
 ) => request<Issue>(`/issue/${issueId}`, { method: "PUT", body: JSON.stringify(input) });
 
+/**
+ * What became of the GitHub issue behind a deleted card. `deleted` is the
+ * promise kept; `closed` means GitHub refused the deletion (only the
+ * repository's owner or admins may delete) and the issue was closed instead;
+ * `left` means the App could not act on it at all. `detail` says why.
+ */
+export type GitHubDeletion = { number: number; outcome: "deleted" | "closed" | "left"; detail: string | null };
+
+/** Deletes the card and, when it mirrors a GitHub issue, that issue too. A GitHub refusal keeps the card and rejects. */
 export const deleteIssue = (issueId: string) =>
-  fetch(`${API_URL}/issue/${issueId}`, { method: "DELETE", headers: bearer() }).then((res) => {
-    if (!res.ok) throw new Error(`Request failed with status ${res.status}`);
-  });
+  request<{ github: GitHubDeletion | null }>(`/issue/${issueId}`, { method: "DELETE" });
 
 export const addAssignee = (issueId: string, userId: string) =>
   request<Issue>(`/issue/${issueId}/assignee`, { method: "POST", body: JSON.stringify({ userId }) });
@@ -319,6 +327,9 @@ export const addLabel = (issueId: string, labelId: string) =>
 
 export const removeLabel = (issueId: string, labelId: string) =>
   request<Issue>(`/issue/${issueId}/label/${labelId}`, { method: "DELETE" });
+
+/** Deletes a label from its board; every card carrying it loses it. */
+export const deleteLabel = (labelId: string) => request<void>(`/label/${labelId}`, { method: "DELETE" });
 
 export type OrgMember = { id: string; email: string; role: "ADMIN" | "MEMBER" };
 

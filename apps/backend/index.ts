@@ -49,6 +49,7 @@ import {
 } from "./integrations";
 import {
   createGitHubIssue,
+  deleteGitHubIssue,
   findInstallationForRepo,
   githubAppConfigured,
   listOpenPullRequests,
@@ -1029,7 +1030,17 @@ app.delete("/label/:labelId", requireAuth, async (req, res) => {
   if (!label) throw new HttpError(404, "Not found");
   await requireMember(auth(req), await orgOfBoard(label.boardId));
 
+  // The cards that carried it, read before the cascade takes the join rows.
+  const carriers = await prisma.issueLabel.findMany({ where: { labelId }, select: { issueId: true } });
   await prisma.label.delete({ where: { id: labelId } });
+  // Deleting a label is a first-class action on the issue page, so every open
+  // board hears it: one issue_updated per card the label was on. A card that
+  // vanished meanwhile is not a failure of this delete.
+  await Promise.all(
+    carriers.map((c) =>
+      publishIssue(c.issueId).catch((err) => console.warn(`[labels] could not publish ${c.issueId}:`, err)),
+    ),
+  );
   res.status(204).end();
 });
 
@@ -1096,15 +1107,79 @@ app.put("/issue/:issueId", requireAuth, async (req, res) => {
   res.json(issue);
 });
 
+/** What became of a deleted card's GitHub issue, so the page can say it plainly. */
+type GitHubDeletion = { number: number; outcome: "deleted" | "closed" | "left"; detail: string | null };
+
+/**
+ * Removes the GitHub issue behind a card that is being deleted. GitHub grants
+ * deletion to the repository owner or its admins only, so a refusal is a
+ * normal outcome, not a fault: the issue is closed instead and the refusal is
+ * reported back. This runs BEFORE the card row goes — if GitHub can be neither
+ * deleted nor closed, the card stays and nothing is half done. The other
+ * order is safe too: should the row delete fail after GitHub succeeded,
+ * GitHub's own issues.deleted webhook removes the card.
+ */
+async function removeGitHubIssueFor(boardId: string, number: number): Promise<GitHubDeletion> {
+  const link = await repoForBoard(boardId);
+  const left = (detail: string): GitHubDeletion => ({ number, outcome: "left", detail });
+  if (!githubAppConfigured) return left("GITHUB_APP_ID / GITHUB_PRIVATE_KEY are not set");
+  if (!link || link.installationId === null) return left("the GitHub App is not installed on that repository");
+  if (!link.enabled) return left("the GitHub integration is paused");
+
+  try {
+    await deleteGitHubIssue(link.installationId, link.fullName, number);
+    await recordGitHub(boardId, null);
+    console.log(`[github] deleted issue #${number} in ${link.fullName}`);
+    return { number, outcome: "deleted", detail: null };
+  } catch (err) {
+    const refusal = err instanceof Error ? err.message : String(err);
+    try {
+      await setGitHubIssueState(link.installationId, link.fullName, number, "closed");
+    } catch (closeErr) {
+      const message = closeErr instanceof Error ? closeErr.message : String(closeErr);
+      await recordGitHub(boardId, `Deleting GitHub issue #${number} failed: ${refusal}`).catch(() => {});
+      throw new HttpError(
+        502,
+        `GitHub issue #${number} could not be deleted (${refusal}) or closed (${message}), so the card was kept`,
+      );
+    }
+    await recordGitHub(boardId, `GitHub issue #${number} was closed, not deleted: ${refusal}`).catch(() => {});
+    console.warn(`[github] issue #${number} in ${link.fullName}: delete refused (${refusal}) — closed instead`);
+    return { number, outcome: "closed", detail: refusal };
+  }
+}
+
 app.delete("/issue/:issueId", requireAuth, async (req, res) => {
   const { issueId } = parse(issueIdParam, req.params, "URL parameters");
   await requireMember(auth(req), await orgOfIssue(issueId));
 
-  const existing = await prisma.issue.findUnique({ where: { id: issueId }, select: { boardId: true } });
+  const existing = await prisma.issue.findUnique({
+    where: { id: issueId },
+    select: { boardId: true, githubNumber: true, number: true, title: true, board: { select: { keyPrefix: true } } },
+  });
   if (!existing) throw new HttpError(404, "Not found");
-  await prisma.issue.delete({ where: { id: issueId } });
+  // GitHub first: a refusal there keeps the card, rather than orphaning the issue.
+  const github = existing.githubNumber === null ? null : await removeGitHubIssueFor(existing.boardId, existing.githubNumber);
+  // deleteMany, not delete: GitHub's issues.deleted echo can arrive through
+  // the webhook and remove the row before this line runs. That is success,
+  // not a 404.
+  await prisma.issue.deleteMany({ where: { id: issueId } });
   publish(existing.boardId, { type: "issue_deleted", issueId });
-  res.status(204).end();
+  // The channel hears about a card arriving and moving; it must hear about it
+  // going too, and what happened to its GitHub issue in the same breath.
+  const githubNote =
+    github === null
+      ? ""
+      : github.outcome === "deleted"
+        ? ` — GitHub issue #${github.number} deleted too`
+        : github.outcome === "closed"
+          ? ` — GitHub issue #${github.number} closed`
+          : ` — GitHub issue #${github.number} left as it is`;
+  notifyBoard(
+    existing.boardId,
+    `${issueKey(existing.board.keyPrefix, existing.number)} · Deleted: ${escapeSlack(existing.title)}${githubNote} (${boardLink(existing.boardId, "board")})`,
+  );
+  res.json({ github });
 });
 
 // --- Comments ---------------------------------------------------------------
@@ -1535,8 +1610,14 @@ async function applyIssuePlan(boardId: string, plan: IssuePlan): Promise<void> {
   }
 
   if (plan.type === "delete") {
-    await prisma.issue.delete({ where: { id: existing.id } });
+    // deleteMany: the board may have deleted this card itself a moment ago,
+    // and this echo arriving second is not an error.
+    await prisma.issue.deleteMany({ where: { id: existing.id } });
     publish(boardId, { type: "issue_deleted", issueId: existing.id });
+    notifyBoard(
+      boardId,
+      `${issueKey(existing.board.keyPrefix, existing.number)} · Deleted because GitHub issue #${plan.number} was deleted: ${escapeSlack(existing.title)} (${boardLink(boardId, "board")})`,
+    );
     await recordGitHub(boardId, null);
     return;
   }

@@ -16,6 +16,7 @@ import {
   addLabel,
   createLabel,
   deleteIssue,
+  deleteLabel,
   getIntegrations,
   getIssue,
   getLabels,
@@ -23,6 +24,7 @@ import {
   removeAssignee,
   removeLabel,
   updateIssue,
+  type GitHubDeletion,
   type IssueDetail,
   type Priority,
 } from "@/lib/api";
@@ -69,9 +71,11 @@ function IssuePage() {
               <ArrowLeft className="size-4" />
             </Link>
             <div className="min-w-0">
-              <h1 className="text-text-strong truncate text-lg font-semibold">{issue?.key ?? "Issue"}</h1>
+              {/* The title is what a person came here for; the key is how they
+                  would cite it. Headline the former, keep the latter one line down. */}
+              <h1 className="text-text-strong truncate text-lg font-semibold">{issue?.title ?? "Issue"}</h1>
               <p className="text-text-subtlest truncate text-xs">
-                {issue?.boardTitle} · {issue?.section.title}
+                {issue ? `${issue.key} · ${issue.boardTitle} · ${issue.section.title}` : ""}
               </p>
             </div>
             <Link
@@ -100,6 +104,7 @@ function IssuePage() {
                 <Links issue={issue} boardId={boardId} />
                 <DangerZone
                   issue={issue}
+                  boardId={boardId}
                   onDeleted={() => {
                     void refreshBoard();
                     void navigate({ to: "/boards/$boardId", params: { boardId } });
@@ -315,10 +320,18 @@ function Labels({
   const labelsKey = ["labels", boardId] as const;
   const { data: labels } = useQuery({ queryKey: labelsKey, queryFn: () => getLabels(boardId) });
   const [name, setName] = useState("");
+  // Deleting is board-wide, so it is a two-step gate: the trash icon only
+  // asks; this id records which label is being asked about.
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const attach = useMutation({
     mutationFn: (labelId: string) => addLabel(issue.id, labelId),
-    onSuccess: (next) => onSaved({ labels: next.labels }),
+    onSuccess: (next, labelId) => {
+      onSaved({ labels: next.labels });
+      // A label just attached is no longer offered, so a delete being asked
+      // about it has nothing to point at.
+      setDeletingId((current) => (current === labelId ? null : current));
+    },
   });
   const detach = useMutation({
     mutationFn: (labelId: string) => removeLabel(issue.id, labelId),
@@ -332,8 +345,23 @@ function Labels({
       attach.mutate(label.id);
     },
   });
+  const destroy = useMutation({
+    mutationFn: (labelId: string) => deleteLabel(labelId),
+    onSuccess: () => setDeletingId(null),
+    // On every outcome, not only success: a 404 means someone else deleted it
+    // first, and the refetch is what takes the ghost out of the offer list.
+    // The label was on every card on the board, so the board and this issue
+    // refetch too.
+    onSettled: () =>
+      Promise.all([
+        queryClient.invalidateQueries({ queryKey: labelsKey }),
+        queryClient.invalidateQueries({ queryKey: ["sections", boardId] }),
+        queryClient.invalidateQueries({ queryKey: ["issue", issue.id] }),
+      ]),
+  });
 
   const available = (labels ?? []).filter((l) => !issue.labels.some((x) => x.id === l.id));
+  const deleting = available.find((l) => l.id === deletingId) ?? null;
 
   return (
     <Section title="Labels">
@@ -353,19 +381,69 @@ function Labels({
           {issue.labels.length === 0 && <p className="text-text-subtlest text-xs">No labels.</p>}
         </div>
 
+        {/* Removing a label from this card returns it here, because the board
+            still has it. Without the caption that reads as "it did not go away";
+            the trash icon is how it actually goes away, from every card. */}
         {available.length > 0 && (
-          <div className="flex flex-wrap gap-1">
-            {available.map((label) => (
-              <button
-                key={label.id}
-                type="button"
-                onClick={() => attach.mutate(label.id)}
-                className={cn("rounded-sm px-1.5 py-0.5 text-[10px] font-semibold opacity-60 hover:opacity-100", labelClass(label.color))}
-              >
-                + {label.name}
-              </button>
-            ))}
+          <div className="flex flex-col gap-1">
+            <p className="text-text-subtlest text-[11px]">Other labels on this board. Click to add, or delete from every card.</p>
+            <div className="flex flex-wrap gap-1">
+              {available.map((label) => (
+                <span
+                  key={label.id}
+                  className={cn(
+                    "flex items-center rounded-sm text-[10px] font-semibold opacity-60 hover:opacity-100 focus-within:opacity-100",
+                    labelClass(label.color),
+                  )}
+                >
+                  {/* Inert while a delete is in flight: attaching a label that is
+                      being removed would race the cascade and surface as a 500. */}
+                  <button
+                    type="button"
+                    disabled={destroy.isPending}
+                    onClick={() => attach.mutate(label.id)}
+                    className="px-1.5 py-0.5 disabled:cursor-default"
+                  >
+                    + {label.name}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={destroy.isPending}
+                    onClick={() => setDeletingId(label.id)}
+                    aria-label={`Delete ${label.name} from this board`}
+                    title="Delete from this board"
+                    className="pr-1.5 hover:text-destructive disabled:cursor-default"
+                  >
+                    <Trash2 className="size-3" />
+                  </button>
+                </span>
+              ))}
+            </div>
+            {deleting && (
+              <div className="flex flex-col gap-1.5">
+                <p className="text-text-subtle text-xs">
+                  Delete “{deleting.name}” from this board? Every card carrying it loses it.
+                </p>
+                <div className="flex gap-1.5">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={destroy.isPending}
+                    onClick={() => destroy.mutate(deleting.id)}
+                    className="text-destructive h-7 text-xs"
+                  >
+                    {destroy.isPending ? "Deleting…" : "Delete label"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setDeletingId(null)} className="h-7 text-xs">
+                    Keep it
+                  </Button>
+                </div>
+              </div>
+            )}
           </div>
+        )}
+        {(attach.isError || detach.isError || destroy.isError) && (
+          <p className="text-destructive text-xs">{(attach.error ?? detach.error ?? destroy.error)?.message}</p>
         )}
 
         <form
@@ -498,15 +576,56 @@ function Comments({ issue, onAdded }: { issue: IssueDetail; onAdded: (comment: I
   );
 }
 
-function DangerZone({ issue, onDeleted }: { issue: IssueDetail; onDeleted: () => void }) {
+function DangerZone({ issue, boardId, onDeleted }: { issue: IssueDetail; boardId: string; onDeleted: () => void }) {
   const [confirming, setConfirming] = useState(false);
-  const remove = useMutation({ mutationFn: () => deleteIssue(issue.id), onSuccess: onDeleted });
+  // Whether GitHub will be touched is said before the click, not after: the
+  // same integration status the Elsewhere panel reads (one query, shared).
+  const { data: integrations } = useQuery({ queryKey: ["integrations", boardId], queryFn: () => getIntegrations(boardId) });
+  const github = integrations?.find((i) => i.provider === "GITHUB");
+  const linked = issue.githubNumber !== null;
+  const reachesGitHub = linked && Boolean(github?.connected && github.enabled && github.canWrite);
+
+  // Set only when the card went but GitHub did not do what was promised. The
+  // board has nowhere to say that, so it is said here, before leaving.
+  const [outcome, setOutcome] = useState<GitHubDeletion | null>(null);
+  const remove = useMutation({
+    mutationFn: () => deleteIssue(issue.id),
+    onSuccess: ({ github: result }) => {
+      if (result === null || result.outcome === "deleted") onDeleted();
+      else setOutcome(result);
+    },
+  });
+
+  if (outcome) {
+    return (
+      <Section title="Danger zone">
+        <div className="flex flex-col gap-2">
+          <p className="text-text-subtle text-xs" role="status">
+            {issue.key} was deleted. GitHub issue #{outcome.number}{" "}
+            {outcome.outcome === "closed"
+              ? "was closed, not deleted — GitHub only lets the repository owner or an admin delete issues"
+              : "was left as it is"}
+            {outcome.detail ? ` (${outcome.detail}).` : "."}
+          </p>
+          <Button size="sm" variant="outline" onClick={onDeleted} className="h-7 w-fit text-xs">
+            Back to board
+          </Button>
+        </div>
+      </Section>
+    );
+  }
 
   return (
     <Section title="Danger zone">
       {confirming ? (
         <div className="flex flex-col gap-2">
-          <p className="text-text-subtle text-xs">Delete {issue.key} permanently?</p>
+          <p className="text-text-subtle text-xs">
+            Delete {issue.key} permanently?
+            {linked &&
+              (reachesGitHub
+                ? ` GitHub issue #${issue.githubNumber} in ${issue.repository} will be deleted too.`
+                : ` GitHub issue #${issue.githubNumber} stays: the GitHub App cannot write to ${issue.repository ?? "the repository"}.`)}
+          </p>
           <div className="flex gap-1.5">
             <Button
               size="sm"

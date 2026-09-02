@@ -1,0 +1,28 @@
+# Disposable Postgres for the end-to-end suite. Deliberately NOT part of
+# docker-compose.yml: that file is the production deploy, and this database
+# must never appear on the server.
+#
+# Published on 5433 so it cannot collide with a Postgres a developer already
+# runs on the default port. The E2E stack is the only thing that talks to it,
+# and `bun run e2e:db:reset` throws the volume away between runs.
+name: trello-app-test
+
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: trello
+      POSTGRES_PASSWORD: trello
+      POSTGRES_DB: trello_test
+    ports:
+      - "5433:5432"
+    # tmpfs, so the data lives in RAM and vanishes with the container. An E2E
+    # database has no state worth surviving a restart, and this makes the
+    # reset between runs free.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trello -d trello_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

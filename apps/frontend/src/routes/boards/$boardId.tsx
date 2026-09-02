@@ -70,6 +70,10 @@ function BoardDetail() {
     queryFn: () => getSections(boardId),
   });
   const sections = data?.sections ?? [];
+  // Where a ticked card goes. Default columns cannot be deleted (the backend
+  // refuses), so `undefined` here is type-level null-safety before the board
+  // has loaded, not a state a board can be in.
+  const doneSection = sections.find((s) => s.kind === "DONE");
 
   // The freshest room token, readable from the (re)connect logic without
   // retriggering the socket effect on every refetch.
@@ -86,9 +90,22 @@ function BoardDetail() {
     onSuccess: (issue) => patchIssue(issue, "issue_added"),
   });
 
+  // Optimistic at the option level, not at the call site: a tick followed by
+  // a click-through unmounts this board, and callbacks passed to mutate() die
+  // with the component. These run whether or not anyone is still watching.
   const move = useMutation({
-    mutationFn: moveIssue,
-    onSuccess: (issue) => patchIssue(issue),
+    mutationFn: ({ issue, sectionId }: { issue: Issue; sectionId: string }) =>
+      moveIssue({ issueId: issue.id, sectionId }),
+    onMutate: ({ issue, sectionId }) => {
+      // Synchronous optimistic placement; the version is deliberately unchanged
+      // so the server's echo (version + 1) corrects the provisional position.
+      patchIssue({ ...issue, sectionId, position: Number.MAX_SAFE_INTEGER });
+    },
+    onSuccess: (moved) => patchIssue(moved),
+    onError: (_err, { issue }) => {
+      patchIssue(issue); // back to the last server-confirmed place
+      void queryClient.invalidateQueries({ queryKey: sectionsKey });
+    },
   });
 
   // Double-clicking the board name turns it into an input. `draft` being null
@@ -118,19 +135,21 @@ function BoardDetail() {
 
   function handleDrop(issue: Issue, toSectionId: string) {
     void playDropSound();
-    // Synchronous optimistic placement; the version is deliberately unchanged
-    // so the server's echo (version + 1) corrects the provisional position.
-    patchIssue({ ...issue, sectionId: toSectionId, position: Number.MAX_SAFE_INTEGER });
-    move.mutate(
-      { issueId: issue.id, sectionId: toSectionId },
-      {
-        onError: () => {
-          patchIssue(issue); // back to the last server-confirmed place
-          void queryClient.invalidateQueries({ queryKey: sectionsKey });
-        },
-      },
-    );
+    move.mutate({ issue, sectionId: toSectionId });
   }
+
+  // A ticked card re-mounts inside Done, and the focus a keyboard user had on
+  // its box dies with the old element. The moved card takes it back once it
+  // exists — `sections` is in the dependencies so the effect runs after the
+  // optimistic placement has rendered it.
+  const [focusIssueId, setFocusIssueId] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusIssueId) return;
+    const card = document.getElementById(`card-${focusIssueId}`);
+    if (!card) return;
+    card.focus();
+    setFocusIssueId(null);
+  }, [focusIssueId, sections]);
 
   const [users, setUsers] = useState<PresentUser[]>([]);
   const [title, setTitle] = useState("");
@@ -380,7 +399,22 @@ function BoardDetail() {
 
                     <ul className="flex flex-col gap-2 px-0.5 pb-1">
                       {section.issues.map((issue) => (
-                        <IssueCard key={issue.id} issue={issue} kind={section.kind} />
+                        <IssueCard
+                          key={issue.id}
+                          issue={issue}
+                          kind={section.kind}
+                          // Ticking a card is the same move as dragging it into
+                          // Done, under the same rules, so it also closes a
+                          // linked GitHub issue the way a drop there would.
+                          onMarkDone={
+                            doneSection && section.id !== doneSection.id && canMove(section.kind, "DONE")
+                              ? () => {
+                                  setFocusIssueId(issue.id);
+                                  handleDrop(issue, doneSection.id);
+                                }
+                              : undefined
+                          }
+                        />
                       ))}
                     </ul>
 

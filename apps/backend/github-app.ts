@@ -115,6 +115,43 @@ export async function setGitHubIssueState(
   return toIssue(await github(`/repos/${fullName}/issues/${number}`, { method: "PATCH", token, body: { state } }));
 }
 
+/**
+ * Deletes an issue for good. REST has no endpoint for this; it is a GraphQL
+ * mutation, addressed by node id, so the number is resolved first. GitHub
+ * grants deletion to the repository owner (personal) or admins (organization)
+ * only — the caller must expect a refusal and decide what to do instead. An
+ * issue that is already gone counts as deleted.
+ *
+ * GraphQL answers 200 with an `errors` array on refusal, so the status alone
+ * says nothing. (On GitHub Enterprise Server the GraphQL endpoint is
+ * /api/graphql rather than /api/v3/graphql; GITHUB_API_URL would need a
+ * second setting to cover that.)
+ */
+export async function deleteGitHubIssue(installationId: number, fullName: string, number: number): Promise<void> {
+  const token = await installationToken(installationId);
+  let nodeId: string;
+  try {
+    const issue = await github(`/repos/${fullName}/issues/${number}`, { token });
+    nodeId = String(issue.node_id);
+  } catch (err) {
+    if (err instanceof GitHubError && err.status === 404) return;
+    throw err;
+  }
+  const res = await github("/graphql", {
+    method: "POST",
+    token,
+    body: {
+      query: "mutation($id: ID!) { deleteIssue(input: { issueId: $id }) { clientMutationId } }",
+      variables: { id: nodeId },
+    },
+  });
+  const errors: { type?: string; message?: string }[] = Array.isArray(res?.errors) ? res.errors : [];
+  if (errors.length === 0) return;
+  // Gone between the lookup and the mutation: the outcome the caller wanted.
+  if (errors.every((e) => e.type === "NOT_FOUND")) return;
+  throw new GitHubError(403, errors.map((e) => e.message ?? e.type ?? "unknown error").join("; "));
+}
+
 export async function updateGitHubIssue(
   installationId: number,
   fullName: string,
