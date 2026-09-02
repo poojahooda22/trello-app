@@ -23,7 +23,11 @@ function Signup() {
     mutationFn: signup,
     onSuccess: ({ token }) => {
       localStorage.setItem("token", token);
-      navigate({ to: "/boards" });
+      // An invitation parked by /accept-invite takes precedence: go back and
+      // let that page redeem it, so the accept logic lives in one place.
+      const invite = localStorage.getItem("pendingInvite");
+      if (invite) navigate({ to: "/accept-invite", search: { token: invite } });
+      else navigate({ to: "/boards" });
     },
   });
 

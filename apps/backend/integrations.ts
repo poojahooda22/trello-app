@@ -103,6 +103,32 @@ export async function listIntegrations(boardId: string): Promise<IntegrationStat
 export const REPO_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 /**
+ * People paste what the browser gives them, which is the repository URL, not
+ * the "owner/repo" the API wants. Accept both: a bare owner/repo, or any
+ * github.com URL — with or without the scheme, a trailing slash, ".git", or a
+ * deeper path like /tree/main. Returns null for anything else, including URLs
+ * on other hosts, which would silently never receive webhooks.
+ */
+export function parseRepoInput(raw: string): string | null {
+  const input = raw.trim();
+  if (REPO_PATTERN.test(input)) return input;
+
+  let path: string;
+  const withScheme = /^[a-z]+:\/\//i.test(input) ? input : `https://${input}`;
+  try {
+    const url = new URL(withScheme);
+    if (url.hostname.toLowerCase() !== "github.com" && url.hostname.toLowerCase() !== "www.github.com") return null;
+    path = url.pathname;
+  } catch {
+    return null;
+  }
+  const [owner, repo] = path.split("/").filter(Boolean);
+  if (!owner || !repo) return null;
+  const candidate = `${owner}/${repo.replace(/\.git$/i, "")}`;
+  return REPO_PATTERN.test(candidate) ? candidate : null;
+}
+
+/**
  * GitHub resolves repository names case-insensitively, so "Acme/API" and
  * "acme/api" are one repository. Storing and looking up a single casing is what
  * makes "one repository, one board" an invariant instead of a convention.

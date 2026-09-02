@@ -485,7 +485,7 @@ function GitHubCard({
               id="gh-repo"
               value={repository}
               onChange={(e) => setRepository(e.target.value)}
-              placeholder="owner/repository"
+              placeholder="owner/repository or GitHub URL"
               className="bg-surface h-9 font-mono text-xs"
             />
             <p className="text-text-subtlest text-xs">

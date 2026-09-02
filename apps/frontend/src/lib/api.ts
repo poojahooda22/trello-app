@@ -157,6 +157,20 @@ export type InviteResult = {
  * scoped, so this grants access to every board in it, not to one board.
  * Requires the caller to be an admin of that organization.
  */
+/** Redeems an invite token for the signed-in user. 403 = wrong email. */
+export async function acceptInvite(token: string): Promise<{ orgId: string; role: string }> {
+  const res = await fetch(`${API_URL}/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...bearer() },
+    body: JSON.stringify({ token }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new Error(body?.error ?? `Request failed with status ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function inviteMember(input: {
   orgId: string;
   email: string;

@@ -8,6 +8,7 @@ import {
   verifyGitHubSignature,
 } from "./github-webhook";
 import { canMove, keyPrefixFor, parseIssueKey } from "./board-rules";
+import { parseRepoInput } from "./integrations";
 
 const sign = (secret: string, body: string) => "sha256=" + createHmac("sha256", secret).update(body).digest("hex");
 
@@ -122,5 +123,22 @@ describe("RecentDeliveries", () => {
     seen.add("c");
     expect(seen.add("a")).toBe(true);
     expect(seen.add("c")).toBe(false);
+  });
+});
+
+describe("parseRepoInput", () => {
+  test("accepts owner/repo and every shape a pasted GitHub URL takes", () => {
+    expect(parseRepoInput("owner/repo")).toBe("owner/repo");
+    expect(parseRepoInput("https://github.com/owner/repo")).toBe("owner/repo");
+    expect(parseRepoInput("https://github.com/owner/repo.git")).toBe("owner/repo");
+    expect(parseRepoInput("https://github.com/owner/repo/tree/main")).toBe("owner/repo");
+    expect(parseRepoInput("github.com/owner/repo/")).toBe("owner/repo");
+    expect(parseRepoInput("www.github.com/owner/repo")).toBe("owner/repo");
+  });
+  test("rejects other hosts and non-repo strings", () => {
+    expect(parseRepoInput("https://gitlab.com/owner/repo")).toBeNull();
+    expect(parseRepoInput("not a repo")).toBeNull();
+    expect(parseRepoInput("https://github.com/onlyowner")).toBeNull();
+    expect(parseRepoInput("")).toBeNull();
   });
 });

@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root';
 import { Route as IndexRouteImport } from './routes/index';
+import { Route as AcceptInviteRouteImport } from './routes/accept-invite';
 import { Route as BoardsIndexRouteImport } from './routes/boards/index';
 import { Route as BoardsBoardIdRouteImport } from './routes/boards/$boardId';
 import { Route as SigninIndexRouteImport } from './routes/signin/index';
@@ -21,6 +22,11 @@ import { Route as BoardsBoardIdIssuesIssueIdRouteImport } from './routes/boards/
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any);
+const AcceptInviteRoute = AcceptInviteRouteImport.update({
+  id: '/accept-invite',
+  path: '/accept-invite',
   getParentRoute: () => rootRouteImport,
 } as any);
 const BoardsIndexRoute = BoardsIndexRouteImport.update({
@@ -63,6 +69,7 @@ const BoardsBoardIdIssuesIssueIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute;
+  '/accept-invite': typeof AcceptInviteRoute;
   '/boards/$boardId': typeof BoardsBoardIdRoute;
   '/boards/': typeof BoardsIndexRoute;
   '/signin/': typeof SigninIndexRoute;
@@ -73,6 +80,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute;
+  '/accept-invite': typeof AcceptInviteRoute;
   '/boards/$boardId': typeof BoardsBoardIdRoute;
   '/boards': typeof BoardsIndexRoute;
   '/signin': typeof SigninIndexRoute;
@@ -84,6 +92,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport;
   '/': typeof IndexRoute;
+  '/accept-invite': typeof AcceptInviteRoute;
   '/boards/$boardId': typeof BoardsBoardIdRoute;
   '/boards/': typeof BoardsIndexRoute;
   '/signin/': typeof SigninIndexRoute;
@@ -96,6 +105,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath;
   fullPaths:
     | '/'
+    | '/accept-invite'
     | '/boards/$boardId'
     | '/boards/'
     | '/signin/'
@@ -106,6 +116,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo;
   to:
     | '/'
+    | '/accept-invite'
     | '/boards/$boardId'
     | '/boards'
     | '/signin'
@@ -116,6 +127,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/accept-invite'
     | '/boards/$boardId'
     | '/boards/'
     | '/signin/'
@@ -127,6 +139,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute;
+  AcceptInviteRoute: typeof AcceptInviteRoute;
   BoardsBoardIdRoute: typeof BoardsBoardIdRoute;
   BoardsIndexRoute: typeof BoardsIndexRoute;
   SigninIndexRoute: typeof SigninIndexRoute;
@@ -143,6 +156,13 @@ declare module '@tanstack/react-router' {
       path: '/';
       fullPath: '/';
       preLoaderRoute: typeof IndexRouteImport;
+      parentRoute: typeof rootRouteImport;
+    };
+    '/accept-invite': {
+      id: '/accept-invite';
+      path: '/accept-invite';
+      fullPath: '/accept-invite';
+      preLoaderRoute: typeof AcceptInviteRouteImport;
       parentRoute: typeof rootRouteImport;
     };
     '/boards/': {
@@ -199,6 +219,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AcceptInviteRoute: AcceptInviteRoute,
   BoardsBoardIdRoute: BoardsBoardIdRoute,
   BoardsIndexRoute: BoardsIndexRoute,
   SigninIndexRoute: SigninIndexRoute,

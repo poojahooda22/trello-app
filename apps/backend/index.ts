@@ -30,7 +30,7 @@ import {
 } from "./board-rules";
 import { mintRoomToken, publish } from "./realtime";
 import {
-  REPO_PATTERN,
+  parseRepoInput,
   SLACK_WEBHOOK_PATTERN,
   boardForRepo,
   boardLink,
@@ -1228,7 +1228,16 @@ app.post("/board/:boardId/integration/slack/test", requireAuth, async (req, res)
 });
 
 const githubConnect = z.object({
-  repository: z.string().regex(REPO_PATTERN, 'Must be "owner/repo"'),
+  repository: z
+    .string()
+    .transform((raw, ctx) => {
+      const parsed = parseRepoInput(raw);
+      if (parsed === null) {
+        ctx.addIssue({ code: "custom", message: 'Must be "owner/repo" or a github.com repository URL' });
+        return z.NEVER;
+      }
+      return parsed;
+    }),
   mirrorIssues: z.boolean().optional(),
 });
 
