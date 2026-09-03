@@ -12,7 +12,7 @@
  */
 import { useMutation } from "@tanstack/react-query";
 import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -31,7 +31,9 @@ export const Route = createFileRoute("/accept-invite")({
 function AcceptInvite() {
   const { token } = Route.useSearch();
   const navigate = useNavigate();
-  const signedIn = Boolean(localStorage.getItem("token"));
+  // State, not a plain read: switching accounts signs out on this very page,
+  // and the page must re-render into its signed-out shape when that happens.
+  const [signedIn, setSignedIn] = useState(() => Boolean(localStorage.getItem("token")));
 
   const accept = useMutation({
     mutationFn: acceptInvite,
@@ -58,11 +60,13 @@ function AcceptInvite() {
     // Park the token first: the effect above parks it only for a visitor who
     // arrived signed out, and this visitor arrived signed in as the wrong
     // person. Without this line, signing in as the right person lands on the
-    // boards with the invitation dropped. Signin returns here and the accept
-    // retries.
+    // boards with the invitation dropped. Then sign out and stay here: the
+    // invited person may have no account yet, so they get the same choice a
+    // signed-out visitor gets — create one, or sign in — and either way this
+    // page is where the accept happens afterwards.
     if (token) localStorage.setItem(PENDING_INVITE_KEY, token);
     localStorage.removeItem("token");
-    navigate({ to: "/signin" });
+    setSignedIn(false);
   }
 
   return (
@@ -110,7 +114,7 @@ function AcceptInvite() {
               <p className="text-destructive text-sm">{accept.error.message}</p>
               {accept.error.message.includes("different email") ? (
                 <Button variant="outline" onClick={switchAccount} className="h-10 w-full">
-                  Sign in with the invited address
+                  Use the invited address instead
                 </Button>
               ) : (
                 <Link to="/boards" className="text-brand text-sm underline">

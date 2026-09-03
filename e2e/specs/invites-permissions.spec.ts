@@ -431,7 +431,10 @@ test("an invitation opened under the wrong account survives switching to the rig
   // page offers the way out rather than a dead end.
   await page.goto(`/accept-invite?token=${token}`);
   await expect(page.getByText("This invitation was issued to a different email address")).toBeVisible();
-  await page.getByRole("button", { name: "Sign in with the invited address" }).click();
+  await page.getByRole("button", { name: "Use the invited address instead" }).click();
+  // Signed out on the spot, and offered both doors: the invited person may
+  // or may not have an account. This one does.
+  await page.getByRole("button", { name: "I already have one" }).click();
   await expect(page).toHaveURL(/\/signin$/);
 
   await page.getByLabel("Email").fill(invitee.email);
@@ -448,4 +451,37 @@ test("an invitation opened under the wrong account survives switching to the rig
       return res.status();
     })
     .toBe(200);
+});
+
+test("an invited person with no account yet can create one from the wrong-account screen", async ({
+  page,
+  api,
+  org,
+}) => {
+  const email = unusedEmail();
+  const token = await inviteToken(await api.invite(org.id, email));
+
+  // Opened while signed in as the owner, as before — but this invitee has
+  // never signed up, so "sign in" would be a dead end for them.
+  await page.goto(`/accept-invite?token=${token}`);
+  await expect(page.getByText("This invitation was issued to a different email address")).toBeVisible();
+  await page.getByRole("button", { name: "Use the invited address instead" }).click();
+  await page.getByRole("button", { name: "Create an account" }).click();
+  await expect(page).toHaveURL(/\/signup$/);
+
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("e2e-password-1234");
+  await page.getByRole("button", { name: "Sign up" }).click();
+
+  // Signing up resumes the parked invitation: the new account is a member.
+  await expect(page).toHaveURL(/\/boards$/);
+  const { request, headers } = api.raw();
+  await expect
+    .poll(async () => {
+      const members = (await (await request.get(`${API_URL}/organization/${org.id}/members`, { headers })).json()) as {
+        user: { email: string };
+      }[];
+      return members.some((m) => m.user.email === email);
+    })
+    .toBe(true);
 });
