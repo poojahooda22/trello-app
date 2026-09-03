@@ -55,8 +55,12 @@ function AcceptInvite() {
   }, [token, signedIn]);
 
   function switchAccount() {
-    // Keep the parked token: after signing in as the right person, signin
-    // returns here and the accept retries.
+    // Park the token first: the effect above parks it only for a visitor who
+    // arrived signed out, and this visitor arrived signed in as the wrong
+    // person. Without this line, signing in as the right person lands on the
+    // boards with the invitation dropped. Signin returns here and the accept
+    // retries.
+    if (token) localStorage.setItem(PENDING_INVITE_KEY, token);
     localStorage.removeItem("token");
     navigate({ to: "/signin" });
   }

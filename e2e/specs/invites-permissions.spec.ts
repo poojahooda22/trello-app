@@ -416,3 +416,36 @@ test("a MEMBER can open the invite dialog but the backend refuses the send", asy
 
   await context.close();
 });
+
+test("an invitation opened under the wrong account survives switching to the right one", async ({
+  page,
+  anon,
+  api,
+  org,
+}) => {
+  const invitee = await signUp(anon);
+  const token = await inviteToken(await api.invite(org.id, invitee.email));
+
+  // The link is opened in a browser already signed in as the owner — the very
+  // person who sent it, checking that it works. The accept is refused, and the
+  // page offers the way out rather than a dead end.
+  await page.goto(`/accept-invite?token=${token}`);
+  await expect(page.getByText("This invitation was issued to a different email address")).toBeVisible();
+  await page.getByRole("button", { name: "Sign in with the invited address" }).click();
+  await expect(page).toHaveURL(/\/signin$/);
+
+  await page.getByLabel("Email").fill(invitee.email);
+  await page.getByLabel("Password").fill(invitee.password);
+  await page.getByRole("button", { name: "Log in" }).click();
+
+  // Signing in resumes the invitation instead of landing on the boards with
+  // it dropped. The proof is the membership, not the URL: the boards page is
+  // where both outcomes end up.
+  await expect(page).toHaveURL(/\/boards$/);
+  await expect
+    .poll(async () => {
+      const res = await anon.get(`${API_URL}/organization/${org.id}/members`, { headers: as(invitee) });
+      return res.status();
+    })
+    .toBe(200);
+});
