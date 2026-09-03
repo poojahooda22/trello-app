@@ -485,3 +485,30 @@ test("an invited person with no account yet can create one from the wrong-accoun
     })
     .toBe(true);
 });
+
+test("an invitation opened under the wrong account does not capture the owner's later sign-ins", async ({
+  page,
+  anon,
+  api,
+  org,
+  user,
+}) => {
+  const invitee = await signUp(anon);
+  const token = await inviteToken(await api.invite(org.id, invitee.email));
+
+  // The owner opens the link, is refused, and simply goes back to work.
+  await page.goto(`/accept-invite?token=${token}`);
+  await expect(page.getByText("This invitation was issued to a different email address")).toBeVisible();
+  await page.getByRole("link", { name: "Go to your boards" }).click();
+  await expect(page).toHaveURL(/\/boards$/);
+
+  // Signing out and back in must land on the boards, not on that refusal
+  // again: nothing about the invitation may linger in this browser.
+  await page.evaluate(() => localStorage.removeItem("token"));
+  await page.goto("/signin");
+  await page.getByLabel("Email").fill(user.email);
+  await page.getByLabel("Password").fill(user.password);
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page).toHaveURL(/\/boards$/);
+  expect(await page.evaluate(() => localStorage.getItem("pendingInvite"))).toBeNull();
+});

@@ -26,10 +26,14 @@ function Signin() {
     onSuccess: ({ token }) => {
       localStorage.setItem("token", token);
       // An invitation parked by /accept-invite takes precedence: go back and
-      // let that page redeem it, so the accept logic lives in one place.
+      // let that page redeem it, so the accept logic lives in one place. It is
+      // consumed here, so one parked invitation cannot capture every later
+      // sign-in; that page parks it again if the person chooses to switch.
       const invite = localStorage.getItem("pendingInvite");
-      if (invite) navigate({ to: "/accept-invite", search: { token: invite } });
-      else navigate({ to: "/boards" });
+      if (invite) {
+        localStorage.removeItem("pendingInvite");
+        navigate({ to: "/accept-invite", search: { token: invite } });
+      } else navigate({ to: "/boards" });
     },
   });
 

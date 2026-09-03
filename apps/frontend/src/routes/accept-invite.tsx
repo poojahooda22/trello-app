@@ -114,15 +114,21 @@ function AcceptInvite() {
           {token && signedIn && accept.isError && (
             <>
               <p className="text-destructive text-sm">{accept.error.message}</p>
-              {accept.error.message.includes("different email") ? (
+              {accept.error.message.includes("different email") && (
                 <Button variant="outline" onClick={switchAccount} className="h-10 w-full">
                   Use the invited address instead
                 </Button>
-              ) : (
-                <Link to="/boards" className="text-brand text-sm underline">
-                  Go to your boards
-                </Link>
               )}
+              {/* Always a way out. Leaving drops the parked invitation, so it
+                  cannot capture the next sign-in; the link in the mail still
+                  works whenever the right person opens it. */}
+              <Link
+                to="/boards"
+                onClick={() => localStorage.removeItem(PENDING_INVITE_KEY)}
+                className="text-brand text-sm underline"
+              >
+                Go to your boards
+              </Link>
             </>
           )}
         </CardContent>
