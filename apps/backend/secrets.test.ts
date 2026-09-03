@@ -62,14 +62,17 @@ describe("secrets", () => {
         "bun",
         "-e",
         `const { decryptSecret } = await import("./secrets");
-         try { console.log("DECRYPTED:" + decryptSecret(process.argv[1])); } catch { console.log("THREW"); }`,
-        foreign,
+         try { console.log("DECRYPTED:" + decryptSecret(process.env.FOREIGN_SECRET)); } catch { console.log("THREW"); }`,
       ],
       {
         // cwd is pinned so `./secrets` resolves the same whether the suite is
         // run from this directory or from the repo root, as CI does.
         cwd: import.meta.dir,
-        env: { ...process.env, INTEGRATION_KEY: "f".repeat(64) },
+        // The ciphertext travels in the environment, not as an argument: it is
+        // base64url, so one time in sixty-four it starts with "-", and Bun then
+        // reads it as a flag, prints its usage text and never runs the script.
+        // That was the deploy flake for 8101933.
+        env: { ...process.env, INTEGRATION_KEY: "f".repeat(64), FOREIGN_SECRET: foreign },
         stdout: "pipe",
         stderr: "pipe",
       },
