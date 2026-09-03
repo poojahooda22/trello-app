@@ -117,9 +117,14 @@ export function InviteDialog({ orgId, orgName }: { orgId: string; orgName: strin
 
         {invite.isSuccess && !invite.data.emailed && invite.data.link && (
           <div className="border-border-subtle mt-3 flex flex-col gap-2 rounded-md border p-3">
+            {/* Two different reasons land here: nothing is configured, or the
+                provider refused the send. Naming the refusal is what lets the
+                admin fix it, rather than hunting for a key that is present. */}
             <p className="text-text-subtle flex items-center gap-2 text-sm">
               <Link2 className="size-4 shrink-0" />
-              No mail provider is configured, so send this link yourself:
+              {invite.data.emailError
+                ? `The email could not be sent (${invite.data.emailError}), so send this link yourself:`
+                : "No mail provider is configured, so send this link yourself:"}
             </p>
             <div className="flex items-center gap-2">
               <code className="bg-surface-sunken text-text-subtle min-w-0 flex-1 truncate rounded px-2 py-1.5 text-xs">
