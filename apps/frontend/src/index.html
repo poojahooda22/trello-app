@@ -13,7 +13,13 @@
         try {
           var t = localStorage.getItem("theme");
           var dark = t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
-          if (dark) document.documentElement.classList.add("dark");
+          // The preference is recorded for the app to read; the class is what
+          // paints. Sign-in, sign-up and the invitation page are light-only —
+          // the toggle lives behind login — so they never get the class, but
+          // the preference survives for the boards afterwards.
+          document.documentElement.dataset.themePreference = dark ? "dark" : "light";
+          var lightOnly = new RegExp("^/(signin|signup|accept-invite)(/|$)").test(location.pathname);
+          if (dark && !lightOnly) document.documentElement.classList.add("dark");
         } catch (e) {
           /* private mode: fall through to the light default */
         }

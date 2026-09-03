@@ -268,3 +268,29 @@ test("a tampered token is refused by the API and renders nothing in the UI", asy
   // would pass on an empty frame and prove nothing.
   await expect(visitor.getByText("create one above")).toBeHidden();
 });
+
+test("the pages in front of the login stay light for someone who chose dark, and dark returns after", async ({
+  visitor,
+}) => {
+  // A returning person who picked dark last time. The choice lives in
+  // localStorage, and the script in index.html reads it before first paint.
+  await visitor.addInitScript(() => localStorage.setItem("theme", "dark"));
+  const html = visitor.locator("html");
+
+  // The theme toggle lives behind the login and these pages were designed on
+  // the light palette, so the class that paints dark must not be there — but
+  // the preference must survive, or the boards would come up light.
+  for (const path of ["/signin", "/signup", "/accept-invite"]) {
+    await visitor.goto(path);
+    await expect(html).toHaveAttribute("data-theme-preference", "dark");
+    await expect(html).not.toHaveClass(/\bdark\b/);
+  }
+
+  await visitor.goto("/signup");
+  await visitor.getByLabel("Email").fill(`e2e-${randomUUID()}@example.test`);
+  await visitor.getByLabel("Password").fill("e2e-password-1234");
+  await visitor.getByRole("button", { name: "Sign up" }).click();
+  await expect(visitor).toHaveURL(/\/boards$/);
+  // Past the login, the person's own choice applies again.
+  await expect(html).toHaveClass(/\bdark\b/);
+});

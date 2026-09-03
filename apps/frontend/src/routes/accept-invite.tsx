@@ -15,6 +15,7 @@ import { Link, createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
+import { useLightOnly } from "@/components/theme-provider";
 import { Card, CardContent } from "@/components/ui/card";
 import { TrelloMark } from "@/components/app/trello-mark";
 import { acceptInvite } from "@/lib/api";
@@ -29,6 +30,7 @@ export const Route = createFileRoute("/accept-invite")({
 });
 
 function AcceptInvite() {
+  useLightOnly();
   const { token } = Route.useSearch();
   const navigate = useNavigate();
   // State, not a plain read: switching accounts signs out on this very page,

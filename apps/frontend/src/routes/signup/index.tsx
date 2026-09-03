@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { signup } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
+import { useLightOnly } from "@/components/theme-provider";
 import { TrelloMark } from "@/components/app/trello-mark";
 import signupLeft from "@/assets/signup-left.jpg";
 import signupRight from "@/assets/signup-right.jpg";
@@ -17,6 +18,7 @@ export const Route = createFileRoute("/signup/")({
 });
 
 function Signup() {
+  useLightOnly();
   const navigate = useNavigate();
 
   const mutation = useMutation({

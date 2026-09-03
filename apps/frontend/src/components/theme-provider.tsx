@@ -9,6 +9,11 @@
  * The initial value is read from the DOM rather than recomputed, because the
  * inline script in index.html has already decided it before first paint. Two
  * copies of that logic would be two things to keep in sync.
+ *
+ * Some pages are light-only: sign-in, sign-up and the invitation page sit in
+ * front of the login, where the toggle does not exist, and were designed on
+ * the light palette. They hold a lock while mounted; the preference itself is
+ * untouched, so the boards come up dark again afterwards.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
@@ -19,6 +24,8 @@ interface ThemeContextValue {
   theme: Theme;
   setTheme: (theme: Theme) => void;
   toggleTheme: () => void;
+  /** Holds the document on the light palette while the calling page is mounted. */
+  lockLight: () => () => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -27,7 +34,9 @@ const STORAGE_KEY = "theme";
 
 function getInitialTheme(): Theme {
   if (typeof document === "undefined") return "light";
-  return document.documentElement.classList.contains("dark") ? "dark" : "light";
+  // The preference, not the class: on a light-only page the script leaves the
+  // class off while still recording what the person chose.
+  return document.documentElement.dataset.themePreference === "dark" ? "dark" : "light";
 }
 
 function hasExplicitChoice() {
@@ -41,15 +50,18 @@ function hasExplicitChoice() {
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(getInitialTheme);
+  // How many light-only pages are mounted. A count rather than a flag, so two
+  // overlapping mounts (StrictMode, a route transition) cannot unlock early.
+  const [lightOnly, setLightOnly] = useState(0);
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
+    document.documentElement.classList.toggle("dark", theme === "dark" && lightOnly === 0);
     try {
       localStorage.setItem(STORAGE_KEY, theme);
     } catch {
       /* private mode; the theme still works for this session */
     }
-  }, [theme]);
+  }, [theme, lightOnly]);
 
   // Until someone picks a theme explicitly, follow the operating system — so a
   // visitor who switches their machine to dark at sunset sees the app follow.
@@ -65,7 +77,15 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setTheme = useCallback((next: Theme) => setThemeState(next), []);
   const toggleTheme = useCallback(() => setThemeState((prev) => (prev === "dark" ? "light" : "dark")), []);
 
-  const value = useMemo<ThemeContextValue>(() => ({ theme, setTheme, toggleTheme }), [theme, setTheme, toggleTheme]);
+  const lockLight = useCallback(() => {
+    setLightOnly((n) => n + 1);
+    return () => setLightOnly((n) => n - 1);
+  }, []);
+
+  const value = useMemo<ThemeContextValue>(
+    () => ({ theme, setTheme, toggleTheme, lockLight }),
+    [theme, setTheme, toggleTheme, lockLight],
+  );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
@@ -74,4 +94,10 @@ export function useTheme(): ThemeContextValue {
   const ctx = useContext(ThemeContext);
   if (!ctx) throw new Error("useTheme must be used within a ThemeProvider");
   return ctx;
+}
+
+/** For pages in front of the login: light palette while mounted, whatever the preference. */
+export function useLightOnly(): void {
+  const { lockLight } = useTheme();
+  useEffect(() => lockLight(), [lockLight]);
 }
