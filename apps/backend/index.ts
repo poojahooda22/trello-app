@@ -188,6 +188,21 @@ async function requireMember(
   return member;
 }
 
+/**
+ * Membership resolved through the board in one statement, for the reads a
+ * page fires on every open. requireMember() needs the organization id first,
+ * which is a second trip to the database — and from another region every
+ * trip is a fifth of a second the person waits. Answers 404 like requireMember.
+ */
+async function requireBoardMember(userId: string, boardId: string): Promise<{ id: string; role: Role; email: string }> {
+  const member = await prisma.member.findFirst({
+    where: { userId, org: { boards: { some: { id: boardId } } } },
+    select: { id: true, role: true, user: { select: { email: true } } },
+  });
+  if (!member) throw new HttpError(404, "Not found");
+  return { id: member.id, role: member.role, email: member.user.email };
+}
+
 async function orgOfBoard(boardId: string): Promise<string> {
   const board = await prisma.board.findUnique({
     where: { id: boardId },
@@ -208,6 +223,7 @@ async function orgOfSection(sectionId: string): Promise<string> {
 
 async function orgOfIssue(issueId: string): Promise<string> {
   const issue = await prisma.issue.findUnique({
+    relationLoadStrategy: "join",
     where: { id: issueId },
     select: { section: { select: { board: { select: { organizationId: true } } } } },
   });
@@ -314,6 +330,7 @@ async function createCard(input: {
         select: { position: true },
       });
       return tx.issue.create({
+        relationLoadStrategy: "join",
         data: {
           sectionId: input.sectionId,
           boardId: input.boardId,
@@ -350,6 +367,7 @@ async function moveIssueTo(
 ): Promise<IssueDto> {
   const [issue, target] = await Promise.all([
     prisma.issue.findUnique({
+      relationLoadStrategy: "join",
       where: { id: issueId },
       select: { ...issueSelect, section: { select: { kind: true, title: true } } },
     }),
@@ -370,7 +388,7 @@ async function moveIssueTo(
   });
   if (count === 0) throw new HttpError(409, "The card was moved by someone else — reload and try again");
 
-  const updated = toIssueDto(await prisma.issue.findUniqueOrThrow({ where: { id: issueId }, select: issueSelect }));
+  const updated = toIssueDto(await prisma.issue.findUniqueOrThrow({ relationLoadStrategy: "join", where: { id: issueId }, select: issueSelect }));
   publish(updated.boardId, { type: "issue_moved", issue: updated });
   if (issue.sectionId !== sectionId) {
     const why = opts.reason ? ` — ${escapeSlack(opts.reason)}` : "";
@@ -520,12 +538,14 @@ app.get("/organization", requireAuth, async (req, res) => {
 
 app.get("/organization/:orgId/members", requireAuth, async (req, res) => {
   const { orgId } = parse(orgIdParam, req.params, "URL parameters");
-  await requireMember(auth(req), orgId);
-
-  const members = await prisma.member.findMany({
-    where: { orgId },
-    select: { id: true, role: true, user: { select: { id: true, email: true } } },
-  });
+  // Side by side, not in sequence; a refused membership discards the list.
+  const [, members] = await Promise.all([
+    requireMember(auth(req), orgId),
+    prisma.member.findMany({
+      where: { orgId },
+      select: { id: true, role: true, user: { select: { id: true, email: true } } },
+    }),
+  ]);
   res.json(members);
 });
 
@@ -736,15 +756,10 @@ app.delete("/board/:boardId", requireAuth, async (req, res) => {
 
 // --- Sections ---------------------------------------------------------------
 
-app.get("/sections", requireAuth, async (req, res) => {
-  const userId = auth(req);
-  const { boardId } = parse(boardIdParam, req.query, "query");
-  await requireMember(userId, await orgOfBoard(boardId));
-
-  await ensureDefaultSections(boardId);
-  // Issues are nested so the whole board renders from one round trip. The
-  // roomToken is the tab's proof of membership for the socket relay.
-  const sections = await prisma.section.findMany({
+/** The whole board as one statement: columns, their cards, and each card's relations, joined. */
+const loadSections = (boardId: string) =>
+  prisma.section.findMany({
+    relationLoadStrategy: "join",
     where: { boardId },
     orderBy: [{ position: "asc" }, { id: "asc" }],
     select: {
@@ -755,11 +770,26 @@ app.get("/sections", requireAuth, async (req, res) => {
       issues: { orderBy: [{ position: "asc" }, { number: "asc" }], select: issueSelect },
     },
   });
+
+app.get("/sections", requireAuth, async (req, res) => {
+  const userId = auth(req);
+  const { boardId } = parse(boardIdParam, req.query, "query");
+
+  // Membership and the board load side by side — nothing is sent until the
+  // membership check has passed, and a refusal discards the load. The member
+  // row carries the email the roomToken needs, so that is not a third trip.
+  const [me, loaded] = await Promise.all([requireBoardMember(userId, boardId), loadSections(boardId)]);
+  // A board from before the default columns existed grows them on first open;
+  // every other board skips the check entirely.
+  let sections = loaded;
+  if (!sections.some((s) => s.kind !== null)) {
+    await ensureDefaultSections(boardId);
+    sections = await loadSections(boardId);
+  }
   // The token carries the caller's identity so board presence shows real
   // users (the "random id" placeholder in the old socket server is gone).
-  const me = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
   res.json({
-    roomToken: me ? mintRoomToken(boardId, { id: userId, email: me.email }) : "",
+    roomToken: mintRoomToken(boardId, { id: userId, email: me.email }),
     sections: sections.map((s) => ({ ...s, issues: s.issues.map(toIssueDto) })),
   });
 });
@@ -833,6 +863,7 @@ app.get("/issues", requireAuth, async (req, res) => {
   if (sectionId !== undefined) {
     await requireMember(userId, await orgOfSection(sectionId));
     const rows = await prisma.issue.findMany({
+      relationLoadStrategy: "join",
       where: { sectionId },
       orderBy: [{ position: "asc" }, { number: "asc" }],
       select: issueSelect,
@@ -844,6 +875,7 @@ app.get("/issues", requireAuth, async (req, res) => {
   if (boardId !== undefined) {
     await requireMember(userId, await orgOfBoard(boardId));
     const rows = await prisma.issue.findMany({
+      relationLoadStrategy: "join",
       where: { boardId },
       orderBy: [{ section: { position: "asc" } }, { position: "asc" }, { number: "asc" }],
       select: issueSelect,
@@ -931,37 +963,51 @@ app.put("/issue/move", requireAuth, async (req, res) => {
   res.json(await moveIssueTo(body.issueId, body.sectionId, { position: body.position, enforceRules: true }));
 });
 
-/** Everything the issue detail page shows in one request. */
+/**
+ * Everything the issue detail page shows, in one request and one statement.
+ * Membership is a condition on the row rather than a query before it, the
+ * repository link rides along as a relation, and the relations come back as
+ * a join instead of one statement each. This route runs on every card click,
+ * and each trip to the database is paid in full by the person waiting.
+ */
 app.get("/issue/:issueId", requireAuth, async (req, res) => {
   const { issueId } = parse(issueIdParam, req.params, "URL parameters");
-  await requireMember(auth(req), await orgOfIssue(issueId));
 
-  const issue = await prisma.issue.findUnique({
-    where: { id: issueId },
+  const issue = await prisma.issue.findFirst({
+    relationLoadStrategy: "join",
+    where: { id: issueId, board: { organization: { members: { some: { userId: auth(req) } } } } },
     select: {
       ...issueSelect,
       section: { select: { id: true, title: true, kind: true } },
-      board: { select: { keyPrefix: true, organizationId: true, title: true } },
+      board: {
+        select: {
+          keyPrefix: true,
+          organizationId: true,
+          title: true,
+          integrations: { where: { provider: "GITHUB" }, select: { externalId: true } },
+        },
+      },
       comments: {
         orderBy: { createdAt: "asc" },
         select: { id: true, content: true, createdAt: true, user: { select: { id: true, email: true } } },
       },
     },
   });
+  // Missing and not-a-member are one answer, as everywhere else.
   if (!issue) throw new HttpError(404, "Not found");
 
-  const { comments, section, ...row } = issue;
-  const link = await repoForBoard(row.boardId);
+  const { comments, section, board, ...row } = issue;
+  const repository = board.integrations[0]?.externalId ?? null;
   res.json({
-    ...toIssueDto(row),
+    ...toIssueDto({ ...row, board }),
     section,
     comments,
     // The page needs the workspace to offer its members as assignees.
-    organizationId: row.board.organizationId,
-    boardTitle: row.board.title,
+    organizationId: board.organizationId,
+    boardTitle: board.title,
     // Where this card lives outside the board, so the page can link out.
-    repository: link?.fullName ?? null,
-    githubUrl: link && row.githubNumber !== null ? `https://github.com/${link.fullName}/issues/${row.githubNumber}` : null,
+    repository,
+    githubUrl: repository && row.githubNumber !== null ? `https://github.com/${repository}/issues/${row.githubNumber}` : null,
   });
 });
 
@@ -969,7 +1015,7 @@ app.get("/issue/:issueId", requireAuth, async (req, res) => {
 
 /** Publishes the card so every open board reflects the change immediately. */
 async function publishIssue(issueId: string): Promise<IssueDto> {
-  const issue = toIssueDto(await prisma.issue.findUniqueOrThrow({ where: { id: issueId }, select: issueSelect }));
+  const issue = toIssueDto(await prisma.issue.findUniqueOrThrow({ relationLoadStrategy: "join", where: { id: issueId }, select: issueSelect }));
   publish(issue.boardId, { type: "issue_updated", issue });
   return issue;
 }
@@ -1003,8 +1049,12 @@ app.delete("/issue/:issueId/assignee/:userId", requireAuth, async (req, res) => 
 
 app.get("/board/:boardId/labels", requireAuth, async (req, res) => {
   const { boardId } = parse(boardIdParam, req.params, "URL parameters");
-  await requireMember(auth(req), await orgOfBoard(boardId));
-  res.json(await prisma.label.findMany({ where: { boardId }, orderBy: { name: "asc" } }));
+  // Side by side, not in sequence; a refused membership discards the list.
+  const [, labels] = await Promise.all([
+    requireBoardMember(auth(req), boardId),
+    prisma.label.findMany({ where: { boardId }, orderBy: { name: "asc" } }),
+  ]);
+  res.json(labels);
 });
 
 app.post("/board/:boardId/label", requireAuth, async (req, res) => {
@@ -1050,7 +1100,7 @@ app.post("/issue/:issueId/label", requireAuth, async (req, res) => {
   await requireMember(auth(req), await orgOfIssue(issueId));
 
   const [issue, label] = await Promise.all([
-    prisma.issue.findUnique({ where: { id: issueId }, select: { boardId: true } }),
+    prisma.issue.findUnique({ relationLoadStrategy: "join", where: { id: issueId }, select: { boardId: true } }),
     prisma.label.findUnique({ where: { id: body.labelId }, select: { boardId: true } }),
   ]);
   if (!issue || !label) throw new HttpError(404, "Not found");
@@ -1093,6 +1143,7 @@ app.put("/issue/:issueId", requireAuth, async (req, res) => {
 
   const issue = toIssueDto(
     await prisma.issue.update({
+      relationLoadStrategy: "join",
       where: { id: issueId },
       data: {
         title: body.title,
@@ -1154,6 +1205,7 @@ app.delete("/issue/:issueId", requireAuth, async (req, res) => {
   await requireMember(auth(req), await orgOfIssue(issueId));
 
   const existing = await prisma.issue.findUnique({
+    relationLoadStrategy: "join",
     where: { id: issueId },
     select: { boardId: true, githubNumber: true, number: true, title: true, board: { select: { keyPrefix: true } } },
   });
@@ -1271,8 +1323,9 @@ async function requireBoardAdmin(req: Request, boardId: string) {
 
 app.get("/board/:boardId/integrations", requireAuth, async (req, res) => {
   const { boardId } = parse(boardIdParam, req.params, "URL parameters");
-  await requireMember(auth(req), await orgOfBoard(boardId));
-  res.json(await listIntegrations(boardId));
+  // Side by side, not in sequence; a refused membership discards the list.
+  const [, integrations] = await Promise.all([requireBoardMember(auth(req), boardId), listIntegrations(boardId)]);
+  res.json(integrations);
 });
 
 app.put("/board/:boardId/integration/slack", requireAuth, async (req, res) => {
@@ -1374,7 +1427,7 @@ app.post("/issue/:issueId/github", requireAuth, async (req, res) => {
   const { issueId } = parse(issueIdParam, req.params, "URL parameters");
   await requireMember(auth(req), await orgOfIssue(issueId));
 
-  const card = toIssueDto(await prisma.issue.findUniqueOrThrow({ where: { id: issueId }, select: issueSelect }));
+  const card = toIssueDto(await prisma.issue.findUniqueOrThrow({ relationLoadStrategy: "join", where: { id: issueId }, select: issueSelect }));
   if (card.githubNumber !== null) throw new HttpError(409, "That card is already linked to a GitHub issue");
 
   const link = await repoForBoard(card.boardId);
@@ -1388,6 +1441,7 @@ app.post("/issue/:issueId/github", requireAuth, async (req, res) => {
     });
     const updated = toIssueDto(
       await prisma.issue.update({
+        relationLoadStrategy: "join",
         where: { id: issueId },
         data: { githubNumber: created.number, version: { increment: 1 } },
         select: issueSelect,
@@ -1547,6 +1601,7 @@ async function moveCardOnBoard(boardId: string, move: CardMove): Promise<void> {
     return;
   }
   const match = await prisma.issue.findUnique({
+    relationLoadStrategy: "join",
     where: { boardId_number: { boardId, number: parsed.number } },
     select: { id: true },
   });
@@ -1568,6 +1623,7 @@ async function moveCardOnBoard(boardId: string, move: CardMove): Promise<void> {
 /** Applies a GitHub issue event to the board's cards. Idempotent, so our own echoes are harmless. */
 async function applyIssuePlan(boardId: string, plan: IssuePlan): Promise<void> {
   const existing = await prisma.issue.findUnique({
+    relationLoadStrategy: "join",
     where: { boardId_githubNumber: { boardId, githubNumber: plan.number } },
     select: { ...issueSelect, section: { select: { kind: true } } },
   });
@@ -1632,6 +1688,7 @@ async function applyIssuePlan(boardId: string, plan: IssuePlan): Promise<void> {
 
     const updated = toIssueDto(
       await prisma.issue.update({
+        relationLoadStrategy: "join",
         where: { id: existing.id },
         data: { ...data, version: { increment: 1 } },
         select: issueSelect,

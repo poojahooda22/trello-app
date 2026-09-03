@@ -41,7 +41,18 @@ function IssuePage() {
   const queryClient = useQueryClient();
   const key = ["issue", issueId] as const;
 
-  const { data: issue, isPending, isError, error } = useQuery({ queryKey: key, queryFn: () => getIssue(issueId) });
+  const { data: issue, isPending, isError, error } = useQuery({
+    queryKey: key,
+    queryFn: () => getIssue(issueId),
+    // The board prefetches this while the pointer is still over the card;
+    // five seconds keeps that fetch from being repeated the moment the page
+    // mounts on top of it.
+    staleTime: 5_000,
+  });
+  // The panels below need these too, and they depend on the board alone, so
+  // they start now rather than after the issue has arrived.
+  useQuery({ queryKey: ["labels", boardId], queryFn: () => getLabels(boardId) });
+  useQuery({ queryKey: ["integrations", boardId], queryFn: () => getIntegrations(boardId) });
 
   // Refresh the board behind this page, so a change here shows there on return.
   const refreshBoard = () => queryClient.invalidateQueries({ queryKey: ["sections", boardId] });
@@ -230,11 +241,14 @@ function PrioritySelect({ issue, onSaved }: { issue: IssueDetail; onSaved: (patc
 }
 
 function Assignees({ issue, onSaved }: { issue: IssueDetail; onSaved: (patch: Partial<IssueDetail>) => void }) {
+  const [picking, setPicking] = useState(false);
+  // The member list is only needed once the picker is open, so it is not on
+  // the page's critical path.
   const { data: members } = useQuery({
     queryKey: ["members", issue.organizationId],
     queryFn: () => getMembers(issue.organizationId),
+    enabled: picking,
   });
-  const [picking, setPicking] = useState(false);
 
   const add = useMutation({
     mutationFn: (userId: string) => addAssignee(issue.id, userId),

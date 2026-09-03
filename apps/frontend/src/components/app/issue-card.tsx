@@ -1,9 +1,10 @@
 import { useDraggable } from "@dnd-kit/react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { GitPullRequest, Square, SquareCheck } from "lucide-react";
 import { useRef } from "react";
 
-import type { Issue, SectionKind } from "@/lib/api";
+import { getIssue, type Issue, type SectionKind } from "@/lib/api";
 import { ALLOWED } from "@/lib/board";
 import { PRIORITY_MARK, avatarTint, initials, labelClass } from "@/lib/issue-style";
 import { cn } from "@/lib/utils";
@@ -27,7 +28,13 @@ export function IssueCard({
   onMarkDone?: () => void;
 }) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const locked = kind !== null && (ALLOWED[kind] ?? []).length === 0;
+  // The issue page's data starts loading while the pointer is still on its
+  // way to the click: hovering a card is a fair prediction of opening it, and
+  // the page then finds its query already in flight or already done.
+  const warm = () =>
+    void queryClient.prefetchQuery({ queryKey: ["issue", issue.id], queryFn: () => getIssue(issue.id), staleTime: 5_000 });
   const done = kind === "DONE";
   // Ticked, or nowhere to tick into: the box is then inert rather than
   // disabled. A disabled button swallows the click; an inert one lets it fall
@@ -58,6 +65,8 @@ export function IssueCard({
       // action without needing the pointer drag.
       role="button"
       tabIndex={0}
+      onPointerEnter={warm}
+      onFocus={warm}
       // Named by its title and key alone. Without this the name is computed
       // from content, and the checkbox's label would leak into what the card
       // is announced as — an action the card itself never performs.

@@ -2,6 +2,7 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
+  previewFeatures = ["relationJoins"]
   provider = "prisma-client"
   output   = "../generated/prisma"
 }
